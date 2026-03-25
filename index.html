@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stellar Conquest</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #0a0e27;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        #gameCanvas {
+            display: block;
+            cursor: crosshair;
+        }
+
+        .team-color-0 {
+            color: #888;
+        }
+
+        .team-color-1 {
+            color: #4ade80;
+        }
+
+        .team-color-2 {
+            color: #f87171;
+        }
+
+        .team-color-3 {
+            color: #60a5fa;
+        }
+
+        .team-color-4 {
+            color: #fbbf24;
+        }
+
+        .team-color-5 {
+            color: #c084fc;
+        }
+
+        .team-bg-0 {
+            background-color: #888;
+        }
+
+        .team-bg-1 {
+            background-color: #4ade80;
+        }
+
+        .team-bg-2 {
+            background-color: #f87171;
+        }
+
+        .team-bg-3 {
+            background-color: #60a5fa;
+        }
+
+        .team-bg-4 {
+            background-color: #fbbf24;
+        }
+
+        .team-bg-5 {
+            background-color: #c084fc;
+        }
+
+        .glow {
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui" class="fixed top-0 left-0 w-full pointer-events-none">
+        <div class="flex justify-between items-start p-4">
+            <div class="pointer-events-auto bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
+                <h1 class="text-2xl font-bold text-white mb-2">⭐ Stellar Conquest</h1>
+                <div id="teamStats" class="text-sm space-y-1"></div>
+            </div>
+
+            <div class="pointer-events-auto bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
+                <div class="text-white text-sm space-y-2">
+                    <div><strong>Controls:</strong></div>
+                    <div>• Click anywhere to move all ships</div>
+                    <div>• Hold Shift for multi-target (max 3)</div>
+                    <div>• Space: Pause/Resume</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="gameOverScreen"
+            class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+            <div class="bg-gray-900 rounded-lg p-8 border-2 border-gray-700 text-center">
+                <h2 id="gameOverTitle" class="text-4xl font-bold text-white mb-4"></h2>
+                <p id="gameOverMessage" class="text-xl text-gray-300 mb-6"></p>
+                <button id="restartButton"
+                    class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-lg transition">
+                    Play Again
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+
+</html>
