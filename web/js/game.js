@@ -676,6 +676,9 @@ class Game {
         const mults = { small: 1.0, medium: 1.5, large: 2.0, huge: 2.5 };
         const zooms = { small: 1.0, medium: 0.7, large: 0.5, huge: 0.4 };
 
+        const planetCounts = { small: 20, medium: 30, large: 40, huge: 50 };
+        const total = planetCounts[this.settings.galaxySize] || 30;
+
         const worldRadii = { small: 600, medium: 900, large: 1400, huge: 2000 };
         const worldRadius = worldRadii[this.settings.galaxySize] || 900;
         const w = worldRadius * 2 + 300; // bounding square for camera
@@ -702,7 +705,7 @@ class Game {
         };
 
         const pos0 = { x: w / 2 + Math.cos(Math.PI) * (worldRadius * 0.8), y: h / 2 };
-        const pos1 = { x: w / 2 + Math.cos(0) * (worldRadius * 0.8), y: h / 2 };
+      const pos1 = { x: w / 2 + Math.cos(0) * (worldRadius * 0.8), y: h / 2 };
         positions.push(pos0, pos1);
 
         const numTeams = Math.min(this.settings.playerCount, 5);
