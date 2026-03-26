@@ -94,7 +94,7 @@
     <canvas id="gameCanvas"></canvas>
 
     <div id="startMenu"
-        class="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+        class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
         <div class="bg-gray-900 rounded-lg p-8 border-2 border-green-500 max-w-md w-full">
             <h1 class="text-4xl font-bold text-green-400 mb-6 text-center">⭐ Stellar Conquest</h1>
 
@@ -150,14 +150,11 @@
                     </div>
                 </div>
 
-                <div class="pt-2">
+                <div class="space-y-3">
                     <button id="controlsButton"
-                        class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition mb-2">
+                        class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition">
                         🎮 Controls
                     </button>
-                </div>
-
-                <div class="pt-4">
                     <button id="startGameButton"
                         class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition text-lg">
                         Start Game
@@ -169,7 +166,7 @@
 
     <!-- Controls Modal -->
     <div id="controlsModal"
-        class="hidden fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
+        class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
         <div class="bg-gray-900 rounded-lg p-8 border-2 border-gray-700 max-w-md w-full">
             <h2 class="text-2xl font-bold text-white mb-4 text-center">🎮 Controls</h2>
             <div class="text-gray-300 space-y-2 mb-6">
@@ -188,7 +185,7 @@
 
     <!-- Pause Menu -->
     <div id="pauseMenu"
-        class="hidden fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
+        class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
         <div class="bg-gray-900 rounded-lg p-8 border-2 border-yellow-500 max-w-md w-full">
             <h2 class="text-3xl font-bold text-yellow-400 mb-6 text-center">⏸️ Paused</h2>
 
@@ -229,7 +226,7 @@
         <div class="flex justify-between items-start p-4">
             <div class="flex gap-2">
                 <button id="pauseButton"
-                    class="pointer-events-auto bg-black/30 hover:bg-black/50 backdrop-blur-sm text-white p-2 rounded-lg transition border border-white/20">
+                    class="pointer-events-auto bg-black/10 hover:bg-black/30 backdrop-blur-sm text-white p-2 rounded-lg transition border border-white/20">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="6" y="4" width="4" height="16"></rect>
@@ -243,13 +240,13 @@
             </div>
 
             <div id="teamStatsContainer"
-                class="pointer-events-auto bg-black/30 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+                class="pointer-events-auto bg-black/10 backdrop-blur-sm rounded-lg p-4 border border-white/20">
                 <div id="teamStats" class="text-sm space-y-1"></div>
             </div>
         </div>
 
         <div id="upgradePanel"
-            class="fixed bottom-4 left-1/2 transform -translate-x-1/2 pointer-events-auto bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-green-500">
+            class="fixed bottom-4 left-1/2 transform -translate-x-1/2 pointer-events-auto bg-gray-900/50 backdrop-blur-sm rounded-lg p-4 border border-green-500">
             <div id="tokenDisplay" class="hidden text-center mb-3">
                 <span class="text-white text-sm font-bold">Upgrades Available: <span id="playerTokens"
                         class="text-yellow-400">0</span></span>
@@ -278,7 +275,7 @@
         </div>
 
         <div id="gameOverScreen"
-            class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+            class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
             <div class="bg-gray-900 rounded-lg p-8 border-2 border-gray-700 text-center">
                 <h2 id="gameOverTitle" class="text-4xl font-bold text-white mb-4"></h2>
                 <p id="gameOverMessage" class="text-xl text-gray-300 mb-6"></p>

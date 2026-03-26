@@ -119,13 +119,13 @@ class Planet {
     }
 
     takeDamage(damage, attackerTeam, game) {
-    this.health -= damage;
-    if (this.health <= 0) {
-        const attackerPlanets = game ? game.planets.filter(p => p.team === attackerTeam).length : 0;
-        if (game && attackerPlanets > 0 && !game.canTeamReachPlanet(attackerTeam, this.id)) {
-            this.health = 1;
-            return false;
-        }
+        this.health -= damage;
+        if (this.health <= 0) {
+            const attackerPlanets = game ? game.planets.filter(p => p.team === attackerTeam).length : 0;
+            if (game && attackerPlanets > 0 && !game.canTeamReachPlanet(attackerTeam, this.id)) {
+                this.health = 1;
+                return false;
+            }
 
             const oldTeam = this.team;
             this.team = attackerTeam;
@@ -284,9 +284,9 @@ class Ship {
                 nearbyEnemyShip.position.x - this.position.x
             );
 
-            if (Date.now() / 1000 >= this.nextAttackTime) {
+            if (game.gameTime >= this.nextAttackTime) {
                 this.engageCombat(nearbyEnemyShip, game);
-                this.nextAttackTime = Date.now() / 1000 + this.attackCooldown;
+                this.nextAttackTime = game.gameTime + this.attackCooldown;
             }
         }
 
@@ -339,11 +339,11 @@ class Ship {
 
             const distanceToTarget = Vector2.distance(this.position, this.target.position);
             if (distanceToTarget <= ATTACK_RANGE) {
-                if (Date.now() / 1000 >= this.nextAttackTime) {
+                if (game.gameTime >= this.nextAttackTime) {
                     if (this.target instanceof Planet) {
                         this.attackPlanet(this.target, game);
                     }
-                    this.nextAttackTime = Date.now() / 1000 + this.attackCooldown;
+                    this.nextAttackTime = game.gameTime + this.attackCooldown;
                 }
             }
         }
@@ -476,15 +476,14 @@ class AIController {
         this.teamName = teamName;
         this.game = game;
 
-        // Tunable AI parameters
         this.params = {
-            commandCooldown: 1.5,           // Even faster decisions for more action
-            minShipsToAttack: 5,            // Lower barrier to attack
+            commandCooldown: 1.2,
+            minShipsToAttack: 3,
             defenseRadius: 200,
-            defenseThreshold: 15,           // Higher threshold to reduce defensive triggers
-            enemyAttackChance: 0.7,         // More aggressive vs enemies
-            defensePersistence: 3,          // Allow more defense before forcing offense
-            minShipsForDefense: 8,          // Need more ships to defend (prevents weak defense)
+            defenseThreshold: 3,
+            enemyAttackChance: 0.6,
+            defensePersistence: 4,
+            defenseReserveRatio: 0.25,
             enableLogging: DEBUG
         };
 
@@ -493,7 +492,8 @@ class AIController {
 
         this.state = {
             lastCommandTime: -10,
-            currentTarget: null
+            currentTarget: null,
+            lastThreatCheck: 0
         };
 
         this.logBuffer = [];
@@ -503,7 +503,7 @@ class AIController {
         if (!this.params.enableLogging) return;
 
         const timestamp = new Date().toISOString();
-        const gameTime = (Date.now() / 1000).toFixed(2);
+        const gameTime = this.game.gameTime.toFixed(2);
         const teamColor = TEAM_COLORS[this.teamName] || '#ffffff';
         const logEntry = {
             timestamp,
@@ -518,27 +518,111 @@ class AIController {
         console.log(`[AI ${this.teamName} ${teamColor}] ${message}`, data);
     }
 
+    countEnemiesNearPlanet(planet, radius) {
+        let count = 0;
+        for (const s of this.game.ships) {
+            if (s.team !== this.teamName && s.team !== 'neutral' && s.health > 0) {
+                if (Vector2.distance(s.position, planet.position) < radius) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    countFriendliesNearPlanet(planet, radius) {
+        let count = 0;
+        for (const s of this.game.ships) {
+            if (s.team === this.teamName && s.health > 0) {
+                if (Vector2.distance(s.position, planet.position) < radius) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    scoreTarget(planet, teamCenter, teamShips) {
+        const dist = Vector2.distance(planet.position, teamCenter);
+        const nearbyEnemies = this.countEnemiesNearPlanet(planet, 150);
+        const healthFraction = planet.health / planet.maxHealth;
+
+        let score = 0;
+
+        if (planet.team === 'neutral') {
+            score += 40;
+            score -= nearbyEnemies * 8;
+        } else {
+            score += 20;
+            score -= nearbyEnemies * 5;
+        }
+
+        score -= dist * 0.05;
+        score -= healthFraction * 15;
+        score += (1 - healthFraction) * 20;
+
+        if (teamShips.length > 30 && planet.team !== 'neutral') {
+            score += 15;
+        }
+
+        return score;
+    }
+
+    getFleetCentroid(ships) {
+        if (ships.length === 0) return { x: 0, y: 0 };
+        const cx = ships.reduce((s, sh) => s + sh.position.x, 0) / ships.length;
+        const cy = ships.reduce((s, sh) => s + sh.position.y, 0) / ships.length;
+        return { x: cx, y: cy };
+    }
+
+    getThreatenedPlanets(teamPlanets) {
+        const threats = [];
+        for (const planet of teamPlanets) {
+            const radius = planet.size + ATTACK_RANGE + 50;
+            const enemyCount = this.countEnemiesNearPlanet(planet, radius);
+            if (enemyCount >= this.params.defenseThreshold) {
+                threats.push({ planet, enemyCount });
+            }
+        }
+        threats.sort((a, b) => b.enemyCount - a.enemyCount);
+        return threats;
+    }
+
+    assignDefenders(teamShips, threatenedPlanet, numDefenders) {
+        const sorted = [...teamShips].sort((a, b) =>
+            Vector2.distance(a.position, threatenedPlanet.position) -
+            Vector2.distance(b.position, threatenedPlanet.position)
+        );
+
+        const defenders = sorted.slice(0, numDefenders);
+        for (const ship of defenders) {
+            ship.target = threatenedPlanet;
+            ship.isDefending = true;
+            ship.homePlanet = threatenedPlanet;
+        }
+        return defenders;
+    }
+
+    assignAttackers(ships, target) {
+        for (const ship of ships) {
+            ship.target = target;
+            ship.isDefending = false;
+        }
+    }
+
     update(dt) {
-        // Stop logging if game is over
-        if (this.game.gameOver) {
-            return;
-        }
+        if (this.game.gameOver) return;
 
-        const currentTime = Date.now() / 1000;
+        const currentTime = this.game.gameTime;
         const teamPlanets = this.game.planets.filter(p => p.team === this.teamName);
-        const teamShipsAlive = this.game.ships.filter(s => s.team === this.teamName && s.health > 0);
+        const teamShips = this.game.ships.filter(s => s.team === this.teamName && s.health > 0);
 
-        // Stop logging if team is eliminated
-        if (teamPlanets.length === 0 && teamShipsAlive.length === 0) {
-            return;
-        }
+        if (teamPlanets.length === 0 && teamShips.length === 0) return;
 
+        // --- Homeless mode: no planets, just ships ---
         if (teamPlanets.length === 0) {
-            // No planets left — redirect surviving ships to a target
-            const teamShips = this.game.ships.filter(s => s.team === this.teamName && s.health > 0);
             if (teamShips.length === 0) return;
 
-             // If we already have a homeless target, stick with it until captured or gone
             if (this.state.currentTarget && this.state.currentTarget.team !== this.teamName) {
                 for (const ship of teamShips) {
                     ship.target = this.state.currentTarget;
@@ -547,168 +631,137 @@ class AIController {
                 return;
             }
 
-            const currentTime = Date.now() / 1000;
             if (currentTime - this.state.lastCommandTime < this.params.commandCooldown) return;
 
-            // First: look for closest neutral planet
-            const neutralPlanets = this.game.planets.filter(p => p.team === 'neutral');
-            let target = null;
+            const centroid = this.getFleetCentroid(teamShips);
+            const allTargets = this.game.planets
+                .filter(p => p.team !== this.teamName)
+                .map(p => ({ planet: p, dist: Vector2.distance(p.position, centroid) }));
+            allTargets.sort((a, b) => a.dist - b.dist);
 
-            if (neutralPlanets.length > 0) {
-                // Find closest neutral to the fleet centroid
-                const cx = teamShips.reduce((s, sh) => s + sh.position.x, 0) / teamShips.length;
-                const cy = teamShips.reduce((s, sh) => s + sh.position.y, 0) / teamShips.length;
-                neutralPlanets.sort((a, b) =>
-                    Vector2.distance(a.position, {x: cx, y: cy}) -
-                    Vector2.distance(b.position, {x: cx, y: cy})
-                );
-                // Pick from the 3 closest neutrals randomly
-                const topNeutrals = neutralPlanets.slice(0, Math.min(3, neutralPlanets.length));
-                target = topNeutrals[Math.floor(Math.random() * topNeutrals.length)];
-            } else {
-                // No neutrals — find the enemy planet with the fewest ships nearby
-                const enemyPlanets = this.game.planets.filter(p => p.team !== this.teamName && p.team !== 'neutral');
-                if (enemyPlanets.length > 0) {
-                    enemyPlanets.sort((a, b) => {
-                        const shipsA = this.game.ships.filter(s => s.health > 0 && Vector2.distance(s.position, a.position) < 150).length;
-                        const shipsB = this.game.ships.filter(s => s.health > 0 && Vector2.distance(s.position, b.position) < 150).length;
-                        return shipsA - shipsB;
-                    });
-                    target = enemyPlanets[0];
-                }
-            }
+            const neutralFirst = allTargets.filter(t => t.planet.team === 'neutral');
+            const target = (neutralFirst.length > 0 ? neutralFirst[0] : allTargets[0]);
 
             if (target) {
-                this.state.currentTarget = target;
+                this.state.currentTarget = target.planet;
                 for (const ship of teamShips) {
-                    ship.target = target;
+                    ship.target = target.planet;
                     ship.isDefending = false;
                 }
                 this.state.lastCommandTime = currentTime;
+                this.log(`HOMELESS: All ships -> planet ${target.planet.id}`, { team: target.planet.team });
             }
             return;
         }
 
+        // --- Normal mode: has planets ---
         const timeSinceLastCommand = currentTime - this.state.lastCommandTime;
+        if (timeSinceLastCommand < this.params.commandCooldown) return;
 
-        if (timeSinceLastCommand < this.params.commandCooldown) {
-            return;
-        }
+        if (teamShips.length < this.params.minShipsToAttack) return;
 
-        const teamShips = this.game.ships.filter(s => s.team === this.teamName && s.health > 0);
+        // 1) Identify threats to our planets
+        const threats = this.getThreatenedPlanets(teamPlanets);
 
-        if (teamShips.length < this.params.minShipsToAttack) {
-            return;
-        }
+        // 2) Split fleet: reserve defenders, rest attack
+        const totalShips = teamShips.length;
+        let defenderBudget = Math.floor(totalShips * this.params.defenseReserveRatio);
+        const usedDefenders = new Set();
 
-        // Check for planets under attack
-        let planetUnderAttack = null;
-        let maxEnemies = 0;
-        for (const planet of teamPlanets) {
-            const nearbyEnemies = this.game.ships.filter(s =>
-                s.team !== this.teamName &&
-                s.health > 0 &&
-                Vector2.distance(s.position, planet.position) < planet.size + ATTACK_RANGE
-            );
+        if (threats.length > 0 && this.consecutiveDefense < this.params.defensePersistence) {
+            for (const threat of threats) {
+                if (defenderBudget <= 0) break;
 
-            if (nearbyEnemies.length > maxEnemies) {
-                maxEnemies = nearbyEnemies.length;
-                planetUnderAttack = planet;
+                const needed = Math.min(
+                    Math.ceil(threat.enemyCount * 1.3),
+                    defenderBudget
+                );
+
+                const availableShips = teamShips.filter(s => !usedDefenders.has(s.id));
+                const defenders = this.assignDefenders(availableShips, threat.planet, needed);
+                for (const d of defenders) usedDefenders.add(d.id);
+                defenderBudget -= defenders.length;
+
+                this.log(`DEFEND: ${defenders.length} ships -> planet ${threat.planet.id}`, {
+                    enemies: threat.enemyCount
+                });
             }
-        }
-
-        // Defensive behavior - but prevent defensive trap
-        if (planetUnderAttack && maxEnemies >= this.params.defenseThreshold &&
-            this.consecutiveDefense < this.params.defensePersistence &&
-            teamShips.length >= this.params.minShipsForDefense) {
-            this.log(`[${this.teamName.toUpperCase()}] DEFENSIVE ACTION: Protecting planet`, {
-                planetId: planetUnderAttack.id,
-                enemyCount: maxEnemies,
-                threshold: this.params.defenseThreshold,
-                consecutiveDefense: this.consecutiveDefense + 1
-            });
-            this.game.assignTeamShipsToTarget(this.teamName, planetUnderAttack);
-            this.state.lastCommandTime = currentTime;
-            this.state.currentTarget = planetUnderAttack;
             this.consecutiveDefense++;
-            this.hasLoggedDefenseBreak = false;
-            return;
+        } else if (threats.length === 0) {
+            this.consecutiveDefense = 0;
         }
 
-        // Force offensive action if stuck defending (log only once)
         if (this.consecutiveDefense >= this.params.defensePersistence && !this.hasLoggedDefenseBreak) {
-            this.log(`[${this.teamName.toUpperCase()}] BREAKING DEFENSIVE LOOP - Forcing offense`, {
+            this.log(`BREAKING DEFENSE LOOP - Forcing offense`, {
                 consecutiveDefense: this.consecutiveDefense
             });
             this.hasLoggedDefenseBreak = true;
+            this.consecutiveDefense = 0;
         }
 
-        // Randomly abandon current target to break loops
-        const shouldPickNewTarget = Math.random() < 0.15; // 15% chance each cooldown cycle
+        // 3) Offensive fleet = everyone not assigned to defense
+        const offensiveShips = teamShips.filter(s => !usedDefenders.has(s.id));
+        if (offensiveShips.length < this.params.minShipsToAttack) {
+            this.state.lastCommandTime = currentTime;
+            return;
+        }
+
+        // 4) Pick target(s)
+        const shouldPickNew = Math.random() < 0.15;
         const currentTargetConquered = !this.state.currentTarget ||
             this.state.currentTarget.team === this.teamName ||
-            shouldPickNewTarget;
+            shouldPickNew;
 
-        // Always re-issue orders to pull in newly produced ships, even if target hasn't changed
         if (!currentTargetConquered) {
-            this.game.assignTeamShipsToTarget(this.teamName, this.state.currentTarget);
+            this.assignAttackers(offensiveShips, this.state.currentTarget);
             this.state.lastCommandTime = currentTime;
+            return;
         }
 
-        if (currentTargetConquered) {
-            const reachablePlanets = this.game.getReachablePlanets(this.teamName);
-            const neutralTargets = reachablePlanets.filter(p => p.team === 'neutral');
-            const enemyTargets = reachablePlanets.filter(p => p.team !== this.teamName && p.team !== 'neutral');
+        const reachablePlanets = this.game.getReachablePlanets(this.teamName);
+        const targets = reachablePlanets.filter(p => p.team !== this.teamName);
 
-            let target = null;
-
-            // Smarter target selection: prioritize weak enemies when strong
-            if (enemyTargets.length > 0 && (Math.random() < this.params.enemyAttackChance || teamShips.length > 50)) {
-                // Sort by closest first for efficiency
-                const teamCenter = teamPlanets.reduce((acc, p) => {
-                    acc.x += p.position.x;
-                    acc.y += p.position.y;
-                    return acc;
-                }, {x: 0, y: 0});
-                teamCenter.x /= teamPlanets.length;
-                teamCenter.y /= teamPlanets.length;
-
-                enemyTargets.sort((a, b) => {
-                    const distA = Vector2.distance(a.position, teamCenter);
-                    const distB = Vector2.distance(b.position, teamCenter);
-                    return distA - distB;
-                });
-
-                target = enemyTargets[0];
-                this.log(`[${this.teamName.toUpperCase()}] OFFENSIVE ACTION: Attacking ${target.team} planet`, {
-                    planetId: target.id,
-                    planetTeam: target.team,
-                    ships: teamShips.length
-                });
-            } else if (neutralTargets.length > 0) {
-                target = neutralTargets[Math.floor(Math.random() * neutralTargets.length)];
-                this.log(`[${this.teamName.toUpperCase()}] OFFENSIVE ACTION: Attacking neutral planet`, {
-                    planetId: target.id,
-                    ships: teamShips.length
-                });
-            } else if (enemyTargets.length > 0) {
-                // Fallback: attack any enemy if no neutrals left
-                target = enemyTargets[Math.floor(Math.random() * enemyTargets.length)];
-                this.log(`[${this.teamName.toUpperCase()}] OFFENSIVE ACTION: Attacking ${target.team} planet`, {
-                    planetId: target.id,
-                    planetTeam: target.team,
-                    ships: teamShips.length
-                });
-            }
-
-            if (target) {
-                this.game.assignTeamShipsToTarget(this.teamName, target);
-                this.state.lastCommandTime = currentTime;
-                this.state.currentTarget = target;
-                this.consecutiveDefense = 0;  // Reset defensive counter on offense
-                this.hasLoggedDefenseBreak = false;
-            }
+        if (targets.length === 0) {
+            this.state.lastCommandTime = currentTime;
+            return;
         }
+
+        const teamCenter = this.getFleetCentroid(teamPlanets);
+
+        // Score all targets
+        const scored = targets.map(p => ({
+            planet: p,
+            score: this.scoreTarget(p, teamCenter, offensiveShips)
+        }));
+        scored.sort((a, b) => b.score - a.score);
+
+        // If we have enough ships, consider splitting across top 2 targets
+        if (offensiveShips.length >= 20 && scored.length >= 2 &&
+            scored[0].score - scored[1].score < 15) {
+            const half = Math.floor(offensiveShips.length / 2);
+            const group1 = offensiveShips.slice(0, half);
+            const group2 = offensiveShips.slice(half);
+
+            this.assignAttackers(group1, scored[0].planet);
+            this.assignAttackers(group2, scored[1].planet);
+
+            this.state.currentTarget = scored[0].planet;
+            this.log(`SPLIT ATTACK: ${group1.length} -> planet ${scored[0].planet.id}, ${group2.length} -> planet ${scored[1].planet.id}`, {
+                score1: scored[0].score.toFixed(1),
+                score2: scored[1].score.toFixed(1)
+            });
+        } else {
+            const bestTarget = scored[0].planet;
+            this.assignAttackers(offensiveShips, bestTarget);
+            this.state.currentTarget = bestTarget;
+            this.log(`ATTACK: ${offensiveShips.length} ships -> ${bestTarget.team} planet ${bestTarget.id}`, {
+                score: scored[0].score.toFixed(1)
+            });
+        }
+
+        this.consecutiveDefense = 0;
+        this.hasLoggedDefenseBreak = false;
+        this.state.lastCommandTime = currentTime;
     }
 }
 
@@ -747,6 +800,8 @@ class Game {
         this.stopped = false;
         this.frameCounter = 0;
         this.winner = null;
+        this.gameTime = 0;
+        this.accumulator = 0;
         const activeTeams = ['team2', 'team3', 'team4', 'team5'].slice(0, this.settings.playerCount - 1);
         if (this.settings.aiOnlyMode) {
             activeTeams.unshift('team1');
@@ -1360,13 +1415,6 @@ class Game {
             this.camera.isDragging = false;
         });
 
-        window.addEventListener('keydown', (e) => {
-            if (e.code === 'Space') {
-                e.preventDefault();
-                this.paused = !this.paused;
-            }
-        });
-
         document.getElementById('restartButton').addEventListener('click', () => {
             location.reload();
         });
@@ -1579,64 +1627,6 @@ class Game {
         return BASE_CAP + (ownedPlanets * CAP_AMNT);
     }
 
-    updateProduction(dt) {
-        for (const planet of this.planets) {
-            if (planet.team === 'neutral') {
-                const planetShips = this.ships.filter(s =>
-                    s.team === 'neutral' &&
-                    s.health > 0 &&
-                    s.homePlanet === planet
-                ).length;
-
-                if (planetShips < STARTING_SHIPS && planet.productionTimer >= PRODUCTION_INTERVAL) {
-                    this.spawnShipAtPlanet(planet);
-                    planet.productionTimer = 0;
-                }
-                continue;
-            }
-
-            const teamShips = this.ships.filter(s => s.team === planet.team && s.health > 0).length;
-            const maxFleet = this.getMaxFleet(planet.team);
-
-            if (teamShips < maxFleet && planet.productionTimer >= PRODUCTION_INTERVAL) {
-                this.spawnShipAtPlanet(planet);
-                planet.productionTimer = 0;
-            }
-        }
-    }
-
-    canTeamReachPlanet(team, targetPlanetId) {
-        const teamPlanets = this.planets.filter(p => p.team === team);
-        if (teamPlanets.length === 0) return false;
-
-        for (const planet of teamPlanets) {
-            for (const conn of planet.connections) {
-                if (conn.targetId === targetPlanetId) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    getReachablePlanets(team) {
-        const teamPlanets = this.planets.filter(p => p.team === team);
-        const reachable = [];
-        const reachableIds = new Set();
-
-        for (const planet of teamPlanets) {
-            for (const conn of planet.connections) {
-                if (!reachableIds.has(conn.targetId)) {
-                    reachableIds.add(conn.targetId);
-                    reachable.push(this.planets[conn.targetId]);
-                }
-            }
-        }
-
-        return reachable;
-    }
-
     assignTeamShipsToTarget(team, target) {
         const teamShips = this.ships.filter(s => s.team === team && s.health > 0);
 
@@ -1713,29 +1703,6 @@ class Game {
     }
 
     checkWinConditions() {
-        if (this.settings.aiOnlyMode && !this.settings.batchTestMode) {
-            return;
-        }
-
-        // In batch test mode, check for winner in AI-only games
-        if (this.settings.aiOnlyMode && this.settings.batchTestMode) {
-            const planetTeams = new Set();
-            for (const planet of this.planets) {
-                planetTeams.add(planet.team);
-            }
-
-            if (planetTeams.size === 1 && !planetTeams.has('neutral')) {
-                const winningTeam = Array.from(planetTeams)[0];
-                const enemyShipsAlive = this.ships.some(s => s.health > 0 && s.team !== winningTeam && s.team !== 'neutral');
-                if (!enemyShipsAlive) {
-                    this.gameOver = true;
-                    this.winner = winningTeam;
-                    this.handleBatchTestCompletion();
-                    return;
-                }
-            }
-        }
-
         const planetTeams = new Set();
         const hasNeutralPlanets = this.planets.some(p => p.team === 'neutral');
 
@@ -1743,23 +1710,38 @@ class Game {
             planetTeams.add(planet.team);
         }
 
-        const activTeams = new Set();
+        const activeTeams = new Set();
         for (const ship of this.ships) {
             if (ship.health > 0 && ship.team !== 'neutral') {
-                activTeams.add(ship.team);
+                activeTeams.add(ship.team);
             }
         }
+
+        let winnerDetected = false;
 
         if (planetTeams.size === 1 && !hasNeutralPlanets) {
             const winningTeam = Array.from(planetTeams)[0];
             if (winningTeam !== 'neutral') {
-                this.gameOver = true;
-                this.winner = winningTeam;
-                this.showGameOver();
+                const enemyShipsAlive = this.ships.some(s => s.health > 0 && s.team !== winningTeam && s.team !== 'neutral');
+                if (!enemyShipsAlive) {
+                    this.gameOver = true;
+                    this.winner = winningTeam;
+                    winnerDetected = true;
+                }
             }
-        } else if (activTeams.size === 0 && planetTeams.size === 1 && planetTeams.has('neutral')) {
+        } else if (activeTeams.size === 0 && planetTeams.size === 1 && planetTeams.has('neutral')) {
             this.gameOver = true;
             this.winner = 'neutral';
+            winnerDetected = true;
+        }
+
+        if (!winnerDetected) return;
+
+        if (this.settings.aiOnlyMode && this.settings.batchTestMode) {
+            this.handleBatchTestCompletion();
+        } else if (this.settings.aiOnlyMode) {
+            console.log(`[GAME OVER] Winner: ${TEAM_NAMES[this.winner]}`);
+        } else {
             this.showGameOver();
         }
     }
@@ -2054,106 +2036,26 @@ class Game {
     gameLoop() {
         if (this.stopped) return;
         const now = Date.now();
-        const speedMultiplier = this.settings.speedMultiplier || 1;
-        const dt = Math.min((now - this.lastTime) / 1000, 0.1) * speedMultiplier;
+        const wallDt = Math.min((now - this.lastTime) / 1000, 0.1);
         this.lastTime = now;
 
-        this.update(dt);
+        const speedMultiplier = this.settings.speedMultiplier || 1;
+        const FIXED_DT = 1 / 60;
+        const maxSteps = Math.ceil(speedMultiplier * 10);
 
-        // Render every N frames based on speed multiplier to reduce load
-        // At 1x: render every frame
-        // At 10x: render every 5 frames
-        // At 50x: render every 10 frames
-        const renderInterval = Math.max(1, Math.floor(speedMultiplier / 2));
-        this.frameCounter++;
+        this.accumulator += wallDt * speedMultiplier;
 
-        if (this.frameCounter >= renderInterval) {
-            this.render();
-            this.frameCounter = 0;
+        let steps = 0;
+        while (this.accumulator >= FIXED_DT && steps < maxSteps) {
+            this.update(FIXED_DT);
+            this.gameTime += FIXED_DT;
+            this.accumulator -= FIXED_DT;
+            steps++;
+            if (this.gameOver) break;
         }
 
+        this.render();
         requestAnimationFrame(() => this.gameLoop());
-    }
-
-    render() {
-    ctx.fillStyle = '#0a0e27';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    ctx.save();
-    ctx.translate(this.camera.x, this.camera.y);
-    ctx.scale(this.camera.zoom, this.camera.zoom);
-
-    ctx.strokeStyle = '#1a1e3a';
-    ctx.lineWidth = 1 / this.camera.zoom;
-    const gridStart = -this.camera.x / this.camera.zoom;
-    const gridEnd = (canvas.width - this.camera.x) / this.camera.zoom;
-    for (let i = Math.floor(gridStart / 50) * 50; i < gridEnd; i += 50) {
-        ctx.beginPath();
-        ctx.moveTo(i, -this.camera.y / this.camera.zoom);
-        ctx.lineTo(i, (canvas.height - this.camera.y) / this.camera.zoom);
-        ctx.stroke();
-    }
-    const gridStartY = -this.camera.y / this.camera.zoom;
-    const gridEndY = (canvas.height - this.camera.y) / this.camera.zoom;
-    for (let i = Math.floor(gridStartY / 50) * 50; i < gridEndY; i += 50) {
-        ctx.beginPath();
-        ctx.moveTo(-this.camera.x / this.camera.zoom, i);
-        ctx.lineTo((canvas.width - this.camera.x) / this.camera.zoom, i);
-        ctx.stroke();
-    }
-
-    this.drawConnections();
-
-    const reachableIds = this.getPlayerReachablePlanetIds();
-
-    for (const planet of this.planets) {
-        const isDimmed = !reachableIds.has(planet.id);
-        planet.draw(ctx, false, isDimmed);
-    }
-
-    for (const ship of this.ships) {
-        if (ship.health > 0) {
-            ship.draw(ctx);
-        }
-    }
-
-    if (this.targetPlanets.length > 0) {
-        for (const target of this.targetPlanets) {
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2 / this.camera.zoom;
-            ctx.setLineDash([5 / this.camera.zoom, 5 / this.camera.zoom]);
-            ctx.beginPath();
-            ctx.arc(target.position.x, target.position.y, 15, 0, Math.PI * 2);
-            ctx.stroke();
-            ctx.setLineDash([]);
-        }
-    }
-
-    ctx.restore();
-
-    this.updateUI();
-    this.updateUpgradeUI();
-}
-
-updateUI() {
-    const statsDiv = document.getElementById('teamStats');
-    const teams = ['team1', 'team2', 'team3', 'team4', 'team5'];
-
-    let html = '';
-    for (const team of teams) {
-        const planets = this.planets.filter(p => p.team === team).length;
-        const ships = this.ships.filter(s => s.team === team && s.health > 0).length;
-        const maxFleet = this.getMaxFleet(team);
-        const color = TEAM_COLORS[team];
-
-        if (planets > 0 || ships > 0) {
-            html += `<div style="color: ${color}">
-                <strong>${TEAM_NAMES[team]}:</strong> ${planets} planets, ${ships}/${maxFleet} ships
-            </div>`;
-        }
-    }
-
-        statsDiv.innerHTML = html;
     }
 }
 
