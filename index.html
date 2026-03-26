@@ -93,19 +93,186 @@
 <body>
     <canvas id="gameCanvas"></canvas>
 
-    <div id="ui" class="fixed top-0 left-0 w-full pointer-events-none">
-        <div class="flex justify-between items-start p-4">
-            <div class="pointer-events-auto bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
-                <h1 class="text-2xl font-bold text-white mb-2">⭐ Stellar Conquest</h1>
-                <div id="teamStats" class="text-sm space-y-1"></div>
+    <div id="startMenu"
+        class="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
+        <div class="bg-gray-900 rounded-lg p-8 border-2 border-green-500 max-w-md w-full">
+            <h1 class="text-4xl font-bold text-green-400 mb-6 text-center">⭐ Stellar Conquest</h1>
+
+            <div class="space-y-6">
+                <div>
+                    <label class="block text-white text-sm font-bold mb-2">Galaxy Size</label>
+                    <select id="galaxySize"
+                        class="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2">
+                        <option value="small">Small (20 planets)</option>
+                        <option value="medium" selected>Medium (30 planets)</option>
+                        <option value="large">Large (40 planets)</option>
+                        <option value="huge">Huge (50 planets)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-white text-sm font-bold mb-2">Number of Players</label>
+                    <select id="playerCount"
+                        class="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2">
+                        <option value="2" selected>2 Players</option>
+                        <option value="3">3 Players</option>
+                        <option value="4">4 Players</option>
+                        <option value="5">5 Players</option>
+                    </select>
+                    <p id="playerCountWarning" class="text-yellow-400 text-xs mt-1 hidden">Too many players for this
+                        galaxy size!</p>
+                </div>
+
+                <div>
+                    <label class="flex items-center space-x-3 cursor-pointer">
+                        <input type="checkbox" id="aiOnlyMode" class="w-5 h-5 bg-gray-800 border-gray-700 rounded">
+                        <span class="text-white text-sm font-bold">🤖 AI-Only Idle Mode</span>
+                    </label>
+                    <p class="text-gray-400 text-xs mt-1 ml-8">Watch AI players battle it out!</p>
+                </div>
+
+                <div id="batchTestOptions" class="hidden" style="display: none;">
+                    <label class="flex items-center space-x-3 cursor-pointer">
+                        <input type="checkbox" id="batchTestMode" class="w-5 h-5 bg-gray-800 border-gray-700 rounded">
+                        <span class="text-white text-sm font-bold">🧪 Batch Test Mode</span>
+                    </label>
+                    <p class="text-gray-400 text-xs mt-1 ml-8">Run multiple AI games at super speed for testing</p>
+
+                    <div id="batchTestConfig" class="hidden mt-3 ml-8">
+                        <label class="block text-white text-sm font-bold mb-2">Number of Games</label>
+                        <input type="number" id="batchTestCount" min="1" max="1000" value="10"
+                            class="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2">
+
+                        <label class="block text-white text-sm font-bold mb-2 mt-3">Speed Multiplier</label>
+                        <input type="number" id="speedMultiplier" min="1" max="100" value="10"
+                            class="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2">
+                        <p class="text-gray-400 text-xs mt-1">Higher = faster testing (no rendering at >1x)</p>
+                    </div>
+                </div>
+
+                <div class="pt-2">
+                    <button id="controlsButton"
+                        class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition mb-2">
+                        🎮 Controls
+                    </button>
+                </div>
+
+                <div class="pt-4">
+                    <button id="startGameButton"
+                        class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-6 rounded-lg transition text-lg">
+                        Start Game
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Controls Modal -->
+    <div id="controlsModal"
+        class="hidden fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
+        <div class="bg-gray-900 rounded-lg p-8 border-2 border-gray-700 max-w-md w-full">
+            <h2 class="text-2xl font-bold text-white mb-4 text-center">🎮 Controls</h2>
+            <div class="text-gray-300 space-y-2 mb-6">
+                <div>• <strong>Click</strong> anywhere to move all ships</div>
+                <div>• <strong>Hold Shift</strong> for multi-target (max 3)</div>
+                <div>• <strong>Space</strong>: Pause/Resume</div>
+                <div>• <strong>Mouse Wheel</strong>: Zoom</div>
+                <div>• <strong>Click & Drag</strong>: Pan</div>
+            </div>
+            <button id="closeControlsButton"
+                class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition">
+                Close
+            </button>
+        </div>
+    </div>
+
+    <!-- Pause Menu -->
+    <div id="pauseMenu"
+        class="hidden fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
+        <div class="bg-gray-900 rounded-lg p-8 border-2 border-yellow-500 max-w-md w-full">
+            <h2 class="text-3xl font-bold text-yellow-400 mb-6 text-center">⏸️ Paused</h2>
+
+            <div class="space-y-4 mb-6">
+                <div class="bg-gray-800 rounded-lg p-4">
+                    <h3 class="text-white font-bold mb-3">🔊 Audio Settings</h3>
+                    <div class="space-y-2">
+                        <label class="flex items-center justify-between text-gray-300">
+                            <span>Sound Effects</span>
+                            <input type="checkbox" id="soundToggle" class="w-4 h-4">
+                        </label>
+                        <label class="flex items-center justify-between text-gray-300">
+                            <span>Music</span>
+                            <input type="checkbox" id="musicToggle" class="w-4 h-4">
+                        </label>
+                    </div>
+                </div>
             </div>
 
-            <div class="pointer-events-auto bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-gray-700">
-                <div class="text-white text-sm space-y-2">
-                    <div><strong>Controls:</strong></div>
-                    <div>• Click anywhere to move all ships</div>
-                    <div>• Hold Shift for multi-target (max 3)</div>
-                    <div>• Space: Pause/Resume</div>
+            <div class="space-y-3">
+                <button id="pauseControlsButton"
+                    class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg transition">
+                    🎮 Controls
+                </button>
+                <button id="pauseExitButton"
+                    class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition">
+                    ← Exit to Menu
+                </button>
+                <button id="resumeButton"
+                    class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-lg transition">
+                    Resume
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="ui" class="hidden fixed top-0 left-0 w-full pointer-events-none">
+        <div class="flex justify-between items-start p-4">
+            <div class="flex gap-2">
+                <button id="pauseButton"
+                    class="pointer-events-auto bg-black/30 hover:bg-black/50 backdrop-blur-sm text-white p-2 rounded-lg transition border border-white/20">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="6" y="4" width="4" height="16"></rect>
+                        <rect x="14" y="4" width="4" height="16"></rect>
+                    </svg>
+                </button>
+                <button id="downloadLogsButton"
+                    class="pointer-events-auto bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition">
+                    💾 Download AI Logs
+                </button>
+            </div>
+
+            <div id="teamStatsContainer"
+                class="pointer-events-auto bg-black/30 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+                <div id="teamStats" class="text-sm space-y-1"></div>
+            </div>
+        </div>
+
+        <div id="upgradePanel"
+            class="fixed bottom-4 left-1/2 transform -translate-x-1/2 pointer-events-auto bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-green-500">
+            <div id="tokenDisplay" class="hidden text-center mb-3">
+                <span class="text-white text-sm font-bold">Upgrades Available: <span id="playerTokens"
+                        class="text-yellow-400">0</span></span>
+            </div>
+            <div class="flex items-center gap-3 mb-3">
+                <button id="upgradeAttack"
+                    class="bg-red-600 hover:bg-red-700 text-white text-sm font-bold py-2 px-4 rounded transition">
+                    ⚔️ Attack (<span id="attackValue">10</span>)
+                </button>
+                <button id="upgradeDefense"
+                    class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold py-2 px-4 rounded transition">
+                    🛡️ Defense (<span id="defenseValue">10</span>)
+                </button>
+                <button id="upgradeSpeed"
+                    class="bg-purple-600 hover:bg-purple-700 text-white text-sm font-bold py-2 px-4 rounded transition">
+                    ⚡ Speed (<span id="speedValue">80</span>)
+                </button>
+            </div>
+            <div class="flex items-center justify-center">
+                <div class="bg-gray-700 rounded-full h-3 overflow-hidden w-64">
+                    <div id="progressBar"
+                        class="bg-gradient-to-r from-green-500 to-yellow-400 h-full transition-all duration-300"
+                        style="width: 0%"></div>
                 </div>
             </div>
         </div>
