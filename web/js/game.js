@@ -986,8 +986,7 @@ class Game {
     }
 
     getPlayerReachablePlanetIds() {
-        if (teamPlanetCount[1] === 0) {
-            // No planets: all accessible
+        if (this.settings.aiOnlyMode || teamPlanetCount[1] === 0) {
             const s = new Set();
             for (const p of this.planets) s.add(p.id);
             return s;
