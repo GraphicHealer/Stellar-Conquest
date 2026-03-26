@@ -49,6 +49,7 @@ const DEFENSE_PER_TOKEN = 5;
 const SPEED_PER_TOKEN = 10;
 const SHIP_CAP_PER_DEFENSE_TOKEN = 10;
 const PRODUCTION_SPEED_PER_DEFENSE_TOKEN = 0.1;
+const HEALTH_PER_DEFENSE_TOKEN = 25;
 
 // ===== SPATIAL HASH GRID =====
 class SpatialGrid {
@@ -120,7 +121,7 @@ class Planet {
 
     getMaxHealth(defenseTokens) {
         if (this.team === 0) return this.baseHealth;
-        return this.baseHealth + (defenseTokens * 5);
+        return this.baseHealth + (defenseTokens * HEALTH_PER_DEFENSE_TOKEN);
     }
 }
 
@@ -256,8 +257,8 @@ class AIController {
         this.lastCommandTime = 0;
         this.currentTargetId = -1;
         // Scratch arrays to avoid allocation
-        this._defenderIds = new Int32Array(256);
-        this._offensiveIds = new Int32Array(512);
+        this._defenderIds = new Int32Array(MAX_SHIPS);
+        this._offensiveIds = new Int32Array(MAX_SHIPS);
         this._scored = []; // reused
     }
 
@@ -513,6 +514,7 @@ class Game {
             galaxySize: settings.galaxySize || 'medium',
             playerCount: settings.playerCount || 2,
             aiOnlyMode: settings.aiOnlyMode || false,
+            idleMode: settings.idleMode || false,
             batchTestMode: settings.batchTestMode || false,
             speedMultiplier: settings.speedMultiplier || 1
         };
@@ -641,12 +643,13 @@ class Game {
             teamPoints[team] -= this.getTokenCost(team);
             teamTokens[team]++;
             teamTokensEarned[team]++;
-            if (team > 1) this._aiSpendToken(team);
+            if (team > 1 || this.settings.aiOnlyMode) this._aiSpendToken(team);
         }
     }
 
     _aiSpendToken(team) {
         const strategies = {
+            1: ['attack', 'defense', 'speed', 'attack'],
             2: ['attack', 'attack', 'attack', 'speed'],
             3: ['defense', 'defense', 'defense', 'attack'],
             4: ['attack', 'defense', 'speed', 'attack'],
@@ -1462,6 +1465,8 @@ class Game {
         if (this.gameOver) {
             if (this.settings.aiOnlyMode && this.settings.batchTestMode) {
                 this._handleBatchCompletion();
+            } else if (this.settings.aiOnlyMode && this.settings.idleMode) {
+                setTimeout(() => { this.stopped = true; startGame(); }, 100);
             } else if (!this.settings.aiOnlyMode) {
                 this._showGameOver();
             }
@@ -1881,6 +1886,8 @@ function initializeStartMenu() {
     const galaxySize = document.getElementById('galaxySize');
     const playerCount = document.getElementById('playerCount');
     const aiOnlyMode = document.getElementById('aiOnlyMode');
+    const idleModeOption = document.getElementById('idleModeOption');
+    const idleMode = document.getElementById('idleMode');
     const batchTestOptions = document.getElementById('batchTestOptions');
     const batchTestMode = document.getElementById('batchTestMode');
     const batchTestConfig = document.getElementById('batchTestConfig');
@@ -1915,6 +1922,7 @@ function initializeStartMenu() {
     }
 
     aiOnlyMode.addEventListener('change', () => {
+        idleModeOption.classList.toggle('hidden', !aiOnlyMode.checked);
         if (aiOnlyMode.checked && DEBUG) {
             batchTestOptions.style.display = 'block';
             batchTestOptions.classList.remove('hidden');
@@ -1925,6 +1933,8 @@ function initializeStartMenu() {
             batchTestConfig.classList.add('hidden');
         }
     });
+
+    idleModeOption.classList.toggle('hidden', !aiOnlyMode.checked);
 
     batchTestMode.addEventListener('change', () => {
         batchTestConfig.classList.toggle('hidden', !batchTestMode.checked);
@@ -1949,9 +1959,17 @@ function initializeStartMenu() {
             galaxySize: galaxySize.value,
             playerCount: parseInt(playerCount.value),
             aiOnlyMode: aiOnlyMode.checked,
-            batchTestMode: batchTestMode.checked,
-            speedMultiplier: batchTestMode.checked ? (parseInt(speedMultiplier.value) || 10) : 1
+            idleMode: aiOnlyMode.checked && idleMode.checked,
+            batchTestMode: aiOnlyMode.checked && batchTestMode.checked,
+            speedMultiplier: (aiOnlyMode.checked && batchTestMode.checked) ? (parseInt(speedMultiplier.value) || 10) : 1
         };
+        if (settings.idleMode) {
+            const url = new URL(window.location);
+            url.searchParams.set('idle', '1');
+            url.searchParams.set('size', settings.galaxySize);
+            url.searchParams.set('teams', settings.playerCount);
+            window.history.replaceState({}, '', url);
+        }
         if (settings.batchTestMode) {
             window.totalTestGames = parseInt(batchTestCount.value) || 10;
             window.currentTestGame = 1;
@@ -1964,6 +1982,16 @@ function initializeStartMenu() {
     });
 
     validate();
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('idle') === '1') {
+        aiOnlyMode.checked = true;
+        aiOnlyMode.dispatchEvent(new Event('change'));
+        idleMode.checked = true;
+        if (params.get('size')) galaxySize.value = params.get('size');
+        if (params.get('teams')) playerCount.value = params.get('teams');
+        startButton.click();
+    }
 }
 
 function startGame() {
@@ -1971,6 +1999,7 @@ function startGame() {
         galaxySize: document.getElementById('galaxySize').value,
         playerCount: parseInt(document.getElementById('playerCount').value),
         aiOnlyMode: document.getElementById('aiOnlyMode').checked,
+        idleMode: document.getElementById('aiOnlyMode').checked && document.getElementById('idleMode').checked,
         batchTestMode: document.getElementById('batchTestMode').checked,
         speedMultiplier: document.getElementById('batchTestMode').checked ? (parseInt(document.getElementById('speedMultiplier').value) || 10) : 1
     };

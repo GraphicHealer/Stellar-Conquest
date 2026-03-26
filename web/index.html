@@ -100,6 +100,13 @@
                     </label>
                     <p class="text-gray-400 text-xs mt-1 ml-8">Watch AI players battle it out!</p>
                 </div>
+                <div id="idleModeOption" class="hidden">
+                    <label class="flex items-center space-x-3 cursor-pointer">
+                        <input type="checkbox" id="idleMode" class="w-5 h-5 bg-gray-800 border-gray-700 rounded">
+                        <span class="text-white text-sm font-bold">🖥️ Idle Mode</span>
+                    </label>
+                    <p class="text-gray-400 text-xs mt-1 ml-8">Loop AI games forever — great for displays</p>
+                </div>
                 <div id="batchTestOptions" class="hidden" style="display: none;">
                     <label class="flex items-center space-x-3 cursor-pointer">
                         <input type="checkbox" id="batchTestMode" class="w-5 h-5 bg-gray-800 border-gray-700 rounded">
@@ -247,8 +254,8 @@
         </div>
     </div>
 
-    <script src="webgl-renderer.js"></script>
-    <script src="game.js"></script>
+    <script src="js/webgl-renderer.js"></script>
+    <script src="js/game.js"></script>
 </body>
 
 </html>
