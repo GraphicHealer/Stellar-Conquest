@@ -44,34 +44,6 @@
             color: #c084fc;
         }
 
-        .team-bg-0 {
-            background-color: #888;
-        }
-
-        .team-bg-1 {
-            background-color: #4ade80;
-        }
-
-        .team-bg-2 {
-            background-color: #f87171;
-        }
-
-        .team-bg-3 {
-            background-color: #60a5fa;
-        }
-
-        .team-bg-4 {
-            background-color: #fbbf24;
-        }
-
-        .team-bg-5 {
-            background-color: #c084fc;
-        }
-
-        .glow {
-            box-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
-        }
-
         @keyframes pulse {
 
             0%,
@@ -92,12 +64,12 @@
 
 <body>
     <canvas id="gameCanvas"></canvas>
+    <canvas id="overlayCanvas" style="position:absolute;top:0;left:0;pointer-events:none;"></canvas>
 
     <div id="startMenu"
         class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center pointer-events-auto">
         <div class="bg-gray-900 rounded-lg p-8 border-2 border-green-500 max-w-md w-full">
             <h1 class="text-4xl font-bold text-green-400 mb-6 text-center">⭐ Stellar Conquest</h1>
-
             <div class="space-y-6">
                 <div>
                     <label class="block text-white text-sm font-bold mb-2">Galaxy Size</label>
@@ -109,7 +81,6 @@
                         <option value="huge">Huge (50 planets)</option>
                     </select>
                 </div>
-
                 <div>
                     <label class="block text-white text-sm font-bold mb-2">Number of Players</label>
                     <select id="playerCount"
@@ -122,7 +93,6 @@
                     <p id="playerCountWarning" class="text-yellow-400 text-xs mt-1 hidden">Too many players for this
                         galaxy size!</p>
                 </div>
-
                 <div>
                     <label class="flex items-center space-x-3 cursor-pointer">
                         <input type="checkbox" id="aiOnlyMode" class="w-5 h-5 bg-gray-800 border-gray-700 rounded">
@@ -130,26 +100,22 @@
                     </label>
                     <p class="text-gray-400 text-xs mt-1 ml-8">Watch AI players battle it out!</p>
                 </div>
-
                 <div id="batchTestOptions" class="hidden" style="display: none;">
                     <label class="flex items-center space-x-3 cursor-pointer">
                         <input type="checkbox" id="batchTestMode" class="w-5 h-5 bg-gray-800 border-gray-700 rounded">
                         <span class="text-white text-sm font-bold">🧪 Batch Test Mode</span>
                     </label>
                     <p class="text-gray-400 text-xs mt-1 ml-8">Run multiple AI games at super speed for testing</p>
-
                     <div id="batchTestConfig" class="hidden mt-3 ml-8">
                         <label class="block text-white text-sm font-bold mb-2">Number of Games</label>
                         <input type="number" id="batchTestCount" min="1" max="1000" value="10"
                             class="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2">
-
                         <label class="block text-white text-sm font-bold mb-2 mt-3">Speed Multiplier</label>
-                        <input type="number" id="speedMultiplier" min="1" max="100" value="10"
+                        <input type="number" id="speedMultiplier" min="1" max="100" value="1"
                             class="w-full bg-gray-800 text-white border border-gray-700 rounded px-3 py-2">
                         <p class="text-gray-400 text-xs mt-1">Higher = faster testing (no rendering at >1x)</p>
                     </div>
                 </div>
-
                 <div class="space-y-3">
                     <button id="controlsButton"
                         class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition">
@@ -188,7 +154,6 @@
         class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center pointer-events-auto z-50">
         <div class="bg-gray-900 rounded-lg p-8 border-2 border-yellow-500 max-w-md w-full">
             <h2 class="text-3xl font-bold text-yellow-400 mb-6 text-center">⏸️ Paused</h2>
-
             <div class="space-y-4 mb-6">
                 <div class="bg-gray-800 rounded-lg p-4">
                     <h3 class="text-white font-bold mb-3">🔊 Audio Settings</h3>
@@ -204,7 +169,6 @@
                     </div>
                 </div>
             </div>
-
             <div class="space-y-3">
                 <button id="pauseControlsButton"
                     class="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-4 rounded-lg transition">
@@ -233,14 +197,10 @@
                         <rect x="14" y="4" width="4" height="16"></rect>
                     </svg>
                 </button>
-                <button id="downloadLogsButton"
-                    class="pointer-events-auto bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg transition">
-                    💾 Download AI Logs
-                </button>
             </div>
-
             <div id="teamStatsContainer"
                 class="pointer-events-auto bg-black/10 backdrop-blur-sm rounded-lg p-4 border border-white/20">
+                <div id="batchRoundCounter" class="hidden text-sm font-bold text-yellow-400 mb-2"></div>
                 <div id="teamStats" class="text-sm space-y-1"></div>
             </div>
         </div>
@@ -287,6 +247,7 @@
         </div>
     </div>
 
+    <script src="webgl-renderer.js"></script>
     <script src="game.js"></script>
 </body>
 
