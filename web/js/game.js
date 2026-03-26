@@ -1619,7 +1619,7 @@ class Game {
             cd[off + 1] = p.y;
             cd[off + 2] = p.size;
             cd[off + 3] = this._colorIndices[p.team];
-            cd[off + 4] = reachableIds.has(p.id) ? 1.0 : 0.3;
+            cd[off + 4] = (this.settings.aiOnlyMode || reachableIds.has(p.id)) ? 1.0 : 0.3;
             circleCount++;
         }
         r.renderCircles(circleCount);
@@ -1686,8 +1686,7 @@ class Game {
         ctx.textBaseline = 'middle';
         for (let pi = 0; pi < this.planets.length; pi++) {
             const p = this.planets[pi];
-            if (!reachableIds.has(p.id)) ctx.globalAlpha = 0.3;
-            else ctx.globalAlpha = 1;
+            ctx.globalAlpha = (!this.settings.aiOnlyMode && !reachableIds.has(p.id)) ? 0.3 : 1;
             ctx.fillText(Math.ceil(p.health).toString(), p.x, p.y);
 
             // Health ring
@@ -1758,7 +1757,7 @@ class Game {
         // Planets
         const reachableIds = this.getPlayerReachablePlanetIds();
         for (const p of this.planets) {
-            const isDimmed = !reachableIds.has(p.id);
+            const isDimmed = !this.settings.aiOnlyMode && !reachableIds.has(p.id);
             const color = TEAM_COLORS[p.team];
             if (isDimmed) ctx.globalAlpha = 0.3;
 
