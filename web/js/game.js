@@ -1758,7 +1758,7 @@ class Game {
         for (const p of this.planets) {
             const isDimmed = !this.settings.aiOnlyMode && !reachableIds.has(p.id);
             const color = TEAM_COLORS[p.team];
-            if (isDimmed) ctx.globalAlpha = 0.3;
+            ctx.globalAlpha = isDimmed ? 0.3 : 1;
 
             ctx.fillStyle = color;
             ctx.beginPath();
