@@ -25,6 +25,9 @@ const TEAM_COLORS = ['#888888', '#4ade80', '#f87171', '#60a5fa', '#fbbf24', '#c0
 const TEAM_NAMES = ['Neutral', 'Green Alliance', 'Red Empire', 'Blue Federation', 'Gold Collective', 'Purple Dynasty'];
 // Team indices: 0=neutral, 1-5=teams
 
+const BASE_W = 1920;
+const BASE_H = 1080;
+
 const BASE_CAP = 20;
 const CAP_AMNT = 15;
 const BASE_REGEN = 0.5;
@@ -673,10 +676,10 @@ class Game {
         const mults = { small: 1.0, medium: 1.5, large: 2.0, huge: 2.5 };
         const zooms = { small: 1.0, medium: 0.7, large: 0.5, huge: 0.4 };
 
-        const total = sizes[this.settings.galaxySize] || 30;
-        const mult = mults[this.settings.galaxySize] || 1.5;
-        const w = canvas.width * mult;
-        const h = canvas.height * mult;
+        const worldRadii = { small: 600, medium: 900, large: 1400, huge: 2000 };
+        const worldRadius = worldRadii[this.settings.galaxySize] || 900;
+        const w = worldRadius * 2 + 300; // bounding square for camera
+        const h = worldRadius * 2 + 300;
         const margin = 150;
         const minDist = 120;
 
@@ -684,8 +687,10 @@ class Game {
 
         const tryPlace = () => {
             for (let a = 0; a < 200; a++) {
-                const x = margin + Math.random() * (w - margin * 2);
-                const y = margin + Math.random() * (h - margin * 2);
+                const angle = Math.random() * Math.PI * 2;
+                const r = worldRadius * Math.sqrt(Math.random()); // sqrt for uniform distribution
+                const x = w / 2 + Math.cos(angle) * r;
+                const y = h / 2 + Math.sin(angle) * r;
                 let valid = true;
                 for (let j = 0; j < positions.length; j++) {
                     const dx = x - positions[j].x, dy = y - positions[j].y;
@@ -696,15 +701,17 @@ class Game {
             return null;
         };
 
-        const pos0 = { x: margin + 100, y: h / 2 };
-        const pos1 = { x: w - margin - 100, y: h / 2 };
+        const pos0 = { x: w / 2 + Math.cos(Math.PI) * (worldRadius * 0.8), y: h / 2 };
+        const pos1 = { x: w / 2 + Math.cos(0) * (worldRadius * 0.8), y: h / 2 };
         positions.push(pos0, pos1);
 
         const numTeams = Math.min(this.settings.playerCount, 5);
         const zoom = zooms[this.settings.galaxySize] || 0.7;
-        this.camera.zoom = zoom;
-        this.camera.x = canvas.width / 2 - (w / 2) * zoom;
-        this.camera.y = canvas.height / 2 - (h / 2) * zoom;
+        const fitZoomX = canvas.width / w;
+        const fitZoomY = canvas.height / h;
+        this.camera.zoom = Math.min(fitZoomX, fitZoomY);
+        this.camera.x = canvas.width / 2 - (w / 2) * this.camera.zoom;
+        this.camera.y = canvas.height / 2 - (h / 2) * this.camera.zoom;
 
         // Create team home planets
         for (let i = 0; i < numTeams; i++) {
