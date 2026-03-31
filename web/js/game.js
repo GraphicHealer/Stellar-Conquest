@@ -1864,7 +1864,8 @@ class Game {
             if (planets === 0 && ships === 0) continue;
             const maxFleet = this.getMaxFleet(t);
             const color = TEAM_COLORS[t];
-            html += `<div style="color:${color}"><strong>${TEAM_NAMES[t]}:</strong> ${planets} planets, ${ships}/${maxFleet} ships<br><span style="opacity:0.7;font-size:0.85em">⚔️${teamAttackTokens[t]} 🛡️${teamDefenseTokens[t]} ⚡${teamSpeedTokens[t]}</span></div>`;
+            const points = Math.floor(teamPoints[t]);
+            html += `<div style="color:${color}"><strong>${TEAM_NAMES[t]}:</strong> ${planets} planets, ${ships}/${maxFleet} ships<br><span style="opacity:0.7;font-size:0.85em">⚔️${teamAttackTokens[t]} 🛡️${teamDefenseTokens[t]} ⚡${teamSpeedTokens[t]} | 💰${points} pts</span></div>`;
         }
         statsDiv.innerHTML = html;
     }
