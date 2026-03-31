@@ -522,7 +522,8 @@ class Game {
             aiOnlyMode: settings.aiOnlyMode || false,
             idleMode: settings.idleMode || false,
             batchTestMode: settings.batchTestMode || false,
-            speedMultiplier: settings.speedMultiplier || 1
+            speedMultiplier: settings.speedMultiplier || 1,
+            aiPointsMultiplier: settings.aiPointsMultiplier || 0.5
         };
 
         this.planets = [];
@@ -644,7 +645,18 @@ class Game {
     }
 
     awardPoints(team, points) {
-        const adjusted = (team === 1 && !this.settings.aiOnlyMode) ? points : points * AI_POINTS_MULTIPLIER;
+        // Apply multiplier only to AI teams
+        // In player mode: team 1 gets full points, teams 2-5 get reduced points
+        // In AI-only mode: all teams (including team 1) get reduced points
+        let adjusted;
+        if (team === 1 && !this.settings.aiOnlyMode) {
+            // Player team in player mode - full points
+            adjusted = points;
+        } else {
+            // AI teams OR team 1 in AI-only mode - apply multiplier
+            adjusted = points * this.settings.aiPointsMultiplier;
+        }
+
         teamPoints[team] += adjusted;
         while (teamPoints[team] >= this.getTokenCost(team)) {
             teamPoints[team] -= this.getTokenCost(team);
