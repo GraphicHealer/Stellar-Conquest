@@ -54,6 +54,9 @@ const SHIP_CAP_PER_DEFENSE_TOKEN = 10;
 const PRODUCTION_SPEED_PER_DEFENSE_TOKEN = 0.1;
 const HEALTH_PER_DEFENSE_TOKEN = 25;
 
+// reduce to make AI earn tokens slower (e.g. 0.5 = half speed)
+const AI_POINTS_MULTIPLIER = 0.5;
+
 // ===== SPATIAL HASH GRID =====
 class SpatialGrid {
     constructor(cellSize) {
@@ -641,7 +644,8 @@ class Game {
     }
 
     awardPoints(team, points) {
-        teamPoints[team] += points;
+        const adjusted = (team === 1 && !this.settings.aiOnlyMode) ? points : points * AI_POINTS_MULTIPLIER;
+        teamPoints[team] += adjusted;
         while (teamPoints[team] >= this.getTokenCost(team)) {
             teamPoints[team] -= this.getTokenCost(team);
             teamTokens[team]++;
@@ -1893,6 +1897,7 @@ let game = null;
 function initializeStartMenu() {
     const galaxySize = document.getElementById('galaxySize');
     const playerCount = document.getElementById('playerCount');
+    const aiDifficulty = document.getElementById('aiDifficulty');
     const aiOnlyMode = document.getElementById('aiOnlyMode');
     const idleModeOption = document.getElementById('idleModeOption');
     const idleMode = document.getElementById('idleMode');
@@ -1966,6 +1971,7 @@ function initializeStartMenu() {
         const settings = {
             galaxySize: galaxySize.value,
             playerCount: parseInt(playerCount.value),
+            aiPointsMultiplier: parseFloat(aiDifficulty.value),
             aiOnlyMode: aiOnlyMode.checked,
             idleMode: aiOnlyMode.checked && idleMode.checked,
             batchTestMode: aiOnlyMode.checked && batchTestMode.checked,
@@ -1976,6 +1982,7 @@ function initializeStartMenu() {
             url.searchParams.set('idle', '1');
             url.searchParams.set('size', settings.galaxySize);
             url.searchParams.set('teams', settings.playerCount);
+            url.searchParams.set('difficulty', aiDifficulty.value);
             window.history.replaceState({}, '', url);
         }
         if (settings.batchTestMode) {
@@ -1989,16 +1996,28 @@ function initializeStartMenu() {
         game = new Game(settings);
     });
 
-    validate();
-
     const params = new URLSearchParams(window.location.search);
+    if (params.get('size')) {
+        galaxySize.value = params.get('size');
+        galaxySize.dispatchEvent(new Event('change'));
+    }
+    if (params.get('teams')) {
+        playerCount.value = params.get('teams');
+        playerCount.dispatchEvent(new Event('change'));
+    }
+    if (params.get('difficulty')) {
+        aiDifficulty.value = params.get('difficulty');
+        aiDifficulty.dispatchEvent(new Event('change'));
+    }
+
     if (params.get('idle') === '1') {
         aiOnlyMode.checked = true;
         aiOnlyMode.dispatchEvent(new Event('change'));
         idleMode.checked = true;
-        if (params.get('size')) galaxySize.value = params.get('size');
-        if (params.get('teams')) playerCount.value = params.get('teams');
+        validate();
         startButton.click();
+    } else {
+        validate();
     }
 }
 
@@ -2006,6 +2025,7 @@ function startGame() {
     const settings = {
         galaxySize: document.getElementById('galaxySize').value,
         playerCount: parseInt(document.getElementById('playerCount').value),
+        aiPointsMultiplier: parseFloat(document.getElementById('aiDifficulty').value),
         aiOnlyMode: document.getElementById('aiOnlyMode').checked,
         idleMode: document.getElementById('aiOnlyMode').checked && document.getElementById('idleMode').checked,
         batchTestMode: document.getElementById('batchTestMode').checked,
@@ -2028,7 +2048,11 @@ function setupPauseMenu() {
     resumeButton.addEventListener('click', () => {
         if (game) { game.paused = false; pauseMenu.classList.add('hidden'); document.getElementById('ui').classList.remove('hidden'); }
     });
-    pauseExitButton.addEventListener('click', () => location.reload());
+    pauseExitButton.addEventListener('click', () => {
+        const url = new URL(window.location);
+        url.searchParams.delete('idle');
+        window.location.href = url.toString();
+    });
     pauseControlsButton.addEventListener('click', () => {
         pauseMenu.classList.add('hidden');
         controlsModal.classList.remove('hidden');
