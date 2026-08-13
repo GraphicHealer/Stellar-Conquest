@@ -11,7 +11,7 @@ clip there if you want different filenames.
 
 | File | Label | Loops | Default volume | Plays when |
 | --- | --- | --- | --- | --- |
-| `music_menu.mp3` | Menu theme | yes | 0.40 | Start menu is visible (and after exiting to menu) |
+| `music_menu.mp3` | Menu theme | no | 0.40 | Start menu is visible (and after exiting to menu) |
 | `music_battle.mp3` | Battle theme | yes | 0.35 | A game is running |
 
 ## Sound effects
@@ -26,6 +26,12 @@ clip there if you want different filenames.
 | `upgrade.mp3` | Upgrade purchased | 0.60 | An attack / defense / speed token is spent |
 | `victory.mp3` | Victory sting | 0.70 | The player wins |
 | `defeat.mp3` | Defeat sting | 0.70 | The player loses |
+
+## Attribution
+
+Sound effects and music are from [Pixabay](https://pixabay.com), used under the
+[Pixabay Content License](https://pixabay.com/service/license-summary/). If you replace a
+clip with one from another source, credit it here too.
 
 ## Notes
 

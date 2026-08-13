@@ -119,6 +119,9 @@ Audio is wired up but ships without assets. Drop the files listed in
 automatically; any missing file is silently skipped. Sound and music can be toggled
 in the pause menu and the choice is remembered in `localStorage`.
 
+Sound effects and music are from [Pixabay](https://pixabay.com), used under the
+[Pixabay Content License](https://pixabay.com/service/license-summary/).
+
 ## Setup
 
 No build step required to run. Serve the `web` folder with any static file server:
@@ -163,6 +166,11 @@ Stellar-Conquest/
 ├── LICENSE
 └── README.md
 ```
+
+## Credits
+
+- Audio: sound effects and music from [Pixabay](https://pixabay.com)
+  ([Pixabay Content License](https://pixabay.com/service/license-summary/)).
 
 ## License
 
