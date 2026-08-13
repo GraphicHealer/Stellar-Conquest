@@ -4,7 +4,9 @@
 // instanced WebGL rendering, pooled ship arrays.
 // ============================================================
 
-const DEBUG = true;
+// Debug tooling (team stats panel, batch test mode) is opt-in: ?debug=1 or a local host.
+const DEBUG = new URLSearchParams(window.location.search).has('debug') ||
+    ['localhost', '127.0.0.1', ''].includes(window.location.hostname);
 
 const canvas = document.getElementById('gameCanvas');
 const overlayCanvas = document.getElementById('overlayCanvas');
@@ -14,19 +16,22 @@ canvas.height = window.innerHeight;
 overlayCanvas.width = window.innerWidth;
 overlayCanvas.height = window.innerHeight;
 window.addEventListener('resize', () => {
+    const prevW = canvas.width, prevH = canvas.height;
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     overlayCanvas.width = window.innerWidth;
     overlayCanvas.height = window.innerHeight;
+    // Keep whatever was at the centre of the viewport centred after the resize
+    if (game && game.camera) {
+        game.camera.x += (canvas.width - prevW) / 2;
+        game.camera.y += (canvas.height - prevH) / 2;
+    }
 });
 
 // ===== CONSTANTS =====
 const TEAM_COLORS = ['#888888', '#4ade80', '#f87171', '#60a5fa', '#fbbf24', '#c084fc'];
 const TEAM_NAMES = ['Neutral', 'Green Alliance', 'Red Empire', 'Blue Federation', 'Gold Collective', 'Purple Dynasty'];
 // Team indices: 0=neutral, 1-5=teams
-
-const BASE_W = 1920;
-const BASE_H = 1080;
 
 const BASE_CAP = 20;
 const CAP_AMNT = 15;
@@ -35,12 +40,14 @@ const BASE_PLANET_REGEN = 2;
 const ATTACK_COOLDOWN = 1.0;
 const ATTACK_RANGE = 50;
 const ATTACK_RANGE_SQ = ATTACK_RANGE * ATTACK_RANGE;
-const SHIP_SPEED = 80;
 const PRODUCTION_INTERVAL = 2.0;
-const SHIP_RADIUS = 5;
 const SHIP_SPACING = 10;
 const SHIP_SPACING_SQ = SHIP_SPACING * SHIP_SPACING;
 const PLANET_CLEARANCE = 15;
+const MAX_PLANET_RADIUS = 40; // upper bound on planet.size, used to size the planet grid
+const MAX_ATTACKERS_PER_TARGET = 3;
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 5;
 const STARTING_SHIPS = 10;
 const MAX_CONNECTION_DISTANCE = 300;
 
@@ -54,16 +61,12 @@ const SHIP_CAP_PER_DEFENSE_TOKEN = 10;
 const PRODUCTION_SPEED_PER_DEFENSE_TOKEN = 0.1;
 const HEALTH_PER_DEFENSE_TOKEN = 25;
 
-// reduce to make AI earn tokens slower (e.g. 0.5 = half speed)
-const AI_POINTS_MULTIPLIER = 0.5;
-
 // ===== SPATIAL HASH GRID =====
 class SpatialGrid {
     constructor(cellSize) {
         this.cellSize = cellSize;
         this.invCellSize = 1 / cellSize;
         this.cells = new Map();
-        this._keyBuf = 0; // reusable
     }
 
     clear() {
@@ -71,8 +74,11 @@ class SpatialGrid {
     }
 
     _key(cx, cy) {
-        // Cantor-like pairing
-        return (cx * 73856093) ^ (cy * 19349663);
+        // Szudzik pairing on the sign-folded coordinates: injective, so distinct
+        // cells can never share a bucket (an XOR-of-products hash can collide).
+        const a = cx >= 0 ? cx * 2 : -cx * 2 - 1;
+        const b = cy >= 0 ? cy * 2 : -cy * 2 - 1;
+        return a >= b ? a * a + a + b : b * b + a;
     }
 
     insert(id, x, y) {
@@ -158,7 +164,6 @@ const shipHomePlanet = new Int16Array(MAX_SHIPS); // -1 = none
 const shipCombatTarget = new Int32Array(MAX_SHIPS);
 
 let shipCount = 0;
-let nextShipId = 0;
 
 // Free list for recycling dead ship slots
 const freeSlots = [];
@@ -175,12 +180,13 @@ function allocShip() {
 }
 
 function killShip(idx) {
+    // Several attackers can resolve against the same ship in one tick; only the
+    // first kill may recycle the slot, otherwise it lands on the free list twice
+    // and two live ships end up sharing it.
+    if (shipHealth[idx] <= 0) return false;
     shipHealth[idx] = 0;
     freeSlots.push(idx);
-}
-
-function isShipAlive(idx) {
-    return shipHealth[idx] > 0;
+    return true;
 }
 
 function spawnShip(team, x, y, homePlanetIdx) {
@@ -209,9 +215,9 @@ function spawnShip(team, x, y, homePlanetIdx) {
 }
 
 // ===== TEAM DATA =====
-const teamAttackTokens = new Uint8Array(6);
-const teamDefenseTokens = new Uint8Array(6);
-const teamSpeedTokens = new Uint8Array(6);
+const teamAttackTokens = new Uint16Array(6);
+const teamDefenseTokens = new Uint16Array(6);
+const teamSpeedTokens = new Uint16Array(6);
 const teamPoints = new Float64Array(6);
 const teamTokens = new Uint16Array(6);
 const teamTokensEarned = new Uint16Array(6);
@@ -254,18 +260,19 @@ class AIController {
         this.game = game;
         this.commandCooldown = 1.2;
         this.minShipsToAttack = 3;
-        this.defenseRadius = 200;
         this.defenseThreshold = 3;
         this.defensePersistence = 4;
         this.defenseReserveRatio = 0.25;
         this.consecutiveDefense = 0;
-        this.hasLoggedDefenseBreak = false;
         this.lastCommandTime = 0;
         this.currentTargetId = -1;
-        // Scratch arrays to avoid allocation
-        this._defenderIds = new Int32Array(MAX_SHIPS);
+        // Scratch storage to avoid per-tick allocation
         this._offensiveIds = new Int32Array(MAX_SHIPS);
-        this._scored = []; // reused
+        this._defenderFlags = new Uint8Array(MAX_SHIPS);
+        this._defenderDistIdx = new Int32Array(MAX_SHIPS);
+        this._defenderDist = new Float32Array(MAX_SHIPS);
+        this._threatPlanets = [];
+        this._threatCounts = [];
     }
 
     update(dt) {
@@ -326,29 +333,27 @@ class AIController {
 
         // Split fleet: defenders vs attackers
         const defenderBudget = Math.floor(myShipCount * this.defenseReserveRatio);
-        const defenderSet = new Set();
+        const defenderFlags = this._defenderFlags;
+        defenderFlags.fill(0, 0, shipCount);
         let remainingBudget = defenderBudget;
 
-        if (threats.length > 0 && this.consecutiveDefense < this.defensePersistence) {
-            for (let t = 0; t < threats.length && remainingBudget > 0; t++) {
-                const needed = Math.min(Math.ceil(threats[t].count * 1.3), remainingBudget);
-                const assigned = this._assignDefenders(threats[t].planet, needed, defenderSet);
+        if (threats > 0 && this.consecutiveDefense < this.defensePersistence) {
+            for (let t = 0; t < threats && remainingBudget > 0; t++) {
+                const needed = Math.min(Math.ceil(this._threatCounts[t] * 1.3), remainingBudget);
+                const assigned = this._assignDefenders(this._threatPlanets[t], needed, defenderFlags);
                 remainingBudget -= assigned;
             }
             this.consecutiveDefense++;
-        } else if (threats.length === 0) {
+        } else if (threats === 0) {
             this.consecutiveDefense = 0;
         }
 
-        if (this.consecutiveDefense >= this.defensePersistence && !this.hasLoggedDefenseBreak) {
-            this.hasLoggedDefenseBreak = true;
-            this.consecutiveDefense = 0;
-        }
+        if (this.consecutiveDefense >= this.defensePersistence) this.consecutiveDefense = 0;
 
         // Count offensive ships
         let offCount = 0;
         for (let i = 0; i < shipCount; i++) {
-            if (shipHealth[i] > 0 && shipTeam[i] === this.team && !defenderSet.has(i)) {
+            if (shipHealth[i] > 0 && shipTeam[i] === this.team && !defenderFlags[i]) {
                 this._offensiveIds[offCount++] = i;
             }
         }
@@ -369,10 +374,11 @@ class AIController {
             return;
         }
 
-        // Score reachable targets
+        // Score reachable targets, keeping the best two (no sort, no allocation)
         const reachable = this.game.getReachablePlanets(this.team);
-        this._scored.length = 0;
         const centroid = this._getTeamPlanetCentroid();
+        let best = null, bestScore = -Infinity;
+        let second = null, secondScore = -Infinity;
 
         for (let i = 0; i < reachable.length; i++) {
             const p = reachable[i];
@@ -387,31 +393,31 @@ class AIController {
             score -= hpFrac * 15;
             score += (1 - hpFrac) * 20;
             if (offCount > 30 && p.team !== 0) score += 15;
-            this._scored.push({ planet: p, score });
+
+            if (score > bestScore) {
+                second = best; secondScore = bestScore;
+                best = p; bestScore = score;
+            } else if (score > secondScore) {
+                second = p; secondScore = score;
+            }
         }
 
-        if (this._scored.length === 0) {
+        if (!best) {
             this.lastCommandTime = currentTime;
             return;
         }
 
-        this._scored.sort((a, b) => b.score - a.score);
-
-        // Possibly split attack
-        if (offCount >= 20 && this._scored.length >= 2 &&
-            this._scored[0].score - this._scored[1].score < 15) {
+        // Possibly split attack across two similarly valuable targets
+        if (offCount >= 20 && second && bestScore - secondScore < 15) {
             const half = offCount >> 1;
-            this._assignAttackersSlice(this._offensiveIds, 0, half, this._scored[0].planet);
-            this._assignAttackersSlice(this._offensiveIds, half, offCount, this._scored[1].planet);
-            this.currentTargetId = this._scored[0].planet.id;
+            this._assignAttackersSlice(this._offensiveIds, 0, half, best);
+            this._assignAttackersSlice(this._offensiveIds, half, offCount, second);
         } else {
-            const best = this._scored[0].planet;
             this._assignAttackers(this._offensiveIds, offCount, best);
-            this.currentTargetId = best.id;
         }
+        this.currentTargetId = best.id;
 
         this.consecutiveDefense = 0;
-        this.hasLoggedDefenseBreak = false;
         this.lastCommandTime = currentTime;
     }
 
@@ -445,41 +451,59 @@ class AIController {
         return n > 0 ? { x: cx / n, y: cy / n } : { x: 0, y: 0 };
     }
 
+    // Fills this._threatPlanets / this._threatCounts (highest count first) and
+    // returns how many entries are valid. Uses the ship grid instead of a full scan.
     _getThreatenedPlanets() {
-        const threats = [];
+        const planetsOut = this._threatPlanets;
+        const countsOut = this._threatCounts;
+        planetsOut.length = 0;
+        countsOut.length = 0;
+
         const g = this.game;
+        const team = this.team;
         for (const p of g.planets) {
-            if (p.team !== this.team) continue;
+            if (p.team !== team) continue;
             const radius = p.size + ATTACK_RANGE + 50;
             const rSq = radius * radius;
             let enemyCount = 0;
-            for (let i = 0; i < shipCount; i++) {
-                if (shipHealth[i] <= 0 || shipTeam[i] === this.team || shipTeam[i] === 0) continue;
+            g.grid.query(p.x, p.y, radius, (i) => {
+                if (shipHealth[i] <= 0 || shipTeam[i] === team || shipTeam[i] === 0) return;
                 const dx = shipX[i] - p.x, dy = shipY[i] - p.y;
                 if (dx * dx + dy * dy < rSq) enemyCount++;
-            }
-            if (enemyCount >= this.defenseThreshold) {
-                threats.push({ planet: p, count: enemyCount });
-            }
+            });
+            if (enemyCount < this.defenseThreshold) continue;
+            // Insertion sort by descending threat count
+            let ins = planetsOut.length;
+            while (ins > 0 && countsOut[ins - 1] < enemyCount) ins--;
+            planetsOut.splice(ins, 0, p);
+            countsOut.splice(ins, 0, enemyCount);
         }
-        threats.sort((a, b) => b.count - a.count);
-        return threats;
+        return planetsOut.length;
     }
 
-    _assignDefenders(planet, needed, defenderSet) {
-        // Collect distances of our unassigned ships to this planet
-        const dists = [];
+    _assignDefenders(planet, needed, defenderFlags) {
+        if (needed <= 0) return 0;
+        // Keep only the `needed` closest unassigned ships, ordered by distance,
+        // instead of sorting (and allocating) the whole fleet.
+        const idxs = this._defenderDistIdx;
+        const dists = this._defenderDist;
+        let n = 0;
         for (let i = 0; i < shipCount; i++) {
-            if (shipHealth[i] > 0 && shipTeam[i] === this.team && !defenderSet.has(i)) {
-                const dx = shipX[i] - planet.x, dy = shipY[i] - planet.y;
-                dists.push({ idx: i, d: dx * dx + dy * dy });
+            if (shipHealth[i] <= 0 || shipTeam[i] !== this.team || defenderFlags[i]) continue;
+            const dx = shipX[i] - planet.x, dy = shipY[i] - planet.y;
+            const d = dx * dx + dy * dy;
+            if (n === needed) {
+                if (d >= dists[n - 1]) continue;
+                n--; // drop the current worst
             }
+            let j = n++;
+            while (j > 0 && dists[j - 1] > d) { dists[j] = dists[j - 1]; idxs[j] = idxs[j - 1]; j--; }
+            dists[j] = d; idxs[j] = i;
         }
-        dists.sort((a, b) => a.d - b.d);
-        const count = Math.min(needed, dists.length);
+        const count = n;
         for (let i = 0; i < count; i++) {
-            const idx = dists[i].idx;
-            defenderSet.add(idx);
+            const idx = idxs[i];
+            defenderFlags[idx] = 1;
             shipTargetType[idx] = 1;
             shipTargetIdx[idx] = planet.id;
             shipTargetPosX[idx] = planet.x;
@@ -514,6 +538,25 @@ class AIController {
 }
 
 // ===== GAME =====
+// The renderer owns GPU programs and buffers for the lifetime of the page: idle
+// and batch modes create a new Game per round, so it must not be rebuilt per game.
+let sharedRenderer = null;
+let sharedRendererFailed = false;
+
+function getRenderer() {
+    if (sharedRendererFailed) return null;
+    if (!sharedRenderer) {
+        try {
+            sharedRenderer = new WebGLRenderer(canvas);
+        } catch (e) {
+            console.warn('WebGL2 not available, falling back to Canvas2D:', e);
+            sharedRendererFailed = true;
+            return null;
+        }
+    }
+    return sharedRenderer;
+}
+
 class Game {
     constructor(settings = {}) {
         this.settings = {
@@ -543,7 +586,6 @@ class Game {
 
         // Reset global ship pool
         shipCount = 0;
-        nextShipId = 0;
         freeSlots.length = 0;
         shipHealth.fill(0);
 
@@ -563,13 +605,65 @@ class Game {
         this._applyInitialTokens();
         recomputeTeamStats();
 
-        // Spatial grid
+        // Spatial grids: ships are re-inserted every tick, planets never move
         this.grid = new SpatialGrid(ATTACK_RANGE);
+        this.planetGrid = new SpatialGrid(MAX_PLANET_RADIUS * 2 + PLANET_CLEARANCE);
+
+        // Combat scratch (see _calculateCombat)
+        this._pairShip = new Int32Array(MAX_SHIPS);
+        this._pairEnemy = new Int32Array(MAX_SHIPS);
+        this._pairDist = new Float32Array(MAX_SHIPS);
+        this._pairOrder = new Int32Array(MAX_SHIPS);
+        this._attackerCount = new Uint8Array(MAX_SHIPS);
+        this._pairSortCmp = (a, b) => this._pairDist[a] - this._pairDist[b];
+
+        // Reused per-frame sets/counters
+        this._playerReachableIds = new Set();
+        this._neutralShipsPerPlanet = null;
+
+        // Grid-query callbacks are hoisted so the per-ship inner loops stay allocation-free
+        this._qShip = -1;
+        this._qBestEnemy = -1;
+        this._qBestDist = 0;
+        this._findEnemyCb = (j) => {
+            const i = this._qShip;
+            if (j === i || shipTeam[j] === shipTeam[i] || shipHealth[j] <= 0) return;
+            const dx = shipX[j] - shipX[i], dy = shipY[j] - shipY[i];
+            const dSq = dx * dx + dy * dy;
+            if (dSq < this._qBestDist) { this._qBestDist = dSq; this._qBestEnemy = j; }
+        };
+        this._planetCollideCb = (pid) => {
+            const i = this._qShip;
+            const p = this.planets[pid];
+            const dx = shipX[i] - p.x, dy = shipY[i] - p.y;
+            const distSq = dx * dx + dy * dy;
+            const minD = p.size + PLANET_CLEARANCE;
+            if (distSq < minD * minD && distSq > 0.01) {
+                const inv = minD / Math.sqrt(distSq);
+                shipX[i] = p.x + dx * inv;
+                shipY[i] = p.y + dy * inv;
+            }
+        };
+        this._shipCollideCb = (j) => {
+            const i = this._qShip;
+            if (j === i || shipHealth[j] <= 0) return;
+            const dx = shipX[j] - shipX[i], dy = shipY[j] - shipY[i];
+            const dSq = dx * dx + dy * dy;
+            if (dSq < SHIP_SPACING_SQ && dSq > 0.01) {
+                const dist = Math.sqrt(dSq);
+                const overlap = SHIP_SPACING - dist;
+                const inv = 1 / dist;
+                shipX[i] -= dx * inv * (overlap * 0.5);
+                shipY[i] -= dy * inv * (overlap * 0.5);
+            }
+        };
 
         // Reachable planets cache (per team, rebuilt each frame)
         this._reachableCache = new Array(6);
         for (let i = 0; i < 6; i++) this._reachableCache[i] = [];
-        this._reachableDirty = true;
+        this._reachableSeen = null; // per-planet stamp used to dedupe without a Set
+        this._reachableStamp = 0;
+        this._drawnPairs = new Set(); // reused by the connection-line pass
 
         this.camera = { x: 0, y: 0, zoom: 1, isDragging: false, lastMouseX: 0, lastMouseY: 0, hasDragged: false };
 
@@ -585,28 +679,28 @@ class Game {
         this.setupEventListeners();
         this.updateUpgradeUI();
 
-        // Init WebGL renderer
-        try {
-            this.renderer = new WebGLRenderer(canvas);
-            this.useWebGL = true;
-            // Register all team colors
+        this.renderer = getRenderer();
+        this.useWebGL = this.renderer !== null;
+        if (this.useWebGL) {
             this._colorIndices = [];
             for (let i = 0; i < TEAM_COLORS.length; i++) {
                 this._colorIndices.push(this.renderer.registerColor(TEAM_COLORS[i]));
             }
-            // Connection colors
-            this._connBiColor = this.renderer.registerColor('#4a5568');
-            this._connUniColor = this.renderer.registerColor('#2d3748');
             this._connBiRGBA = this._hexToRGBA('#4a5568');
             this._connUniRGBA = this._hexToRGBA('#2d3748');
-        } catch (e) {
-            console.warn('WebGL2 not available, falling back to Canvas2D:', e);
-            this.useWebGL = false;
+        } else {
             this._colorIndices = [0, 1, 2, 3, 4, 5];
         }
 
         this.lastTime = Date.now();
         this.gameLoop();
+    }
+
+    // Ends this game and releases everything it owns. Idle/batch mode replaces the
+    // Game object every round, so leaking listeners here compounds forever.
+    stop() {
+        this.stopped = true;
+        this._listenerAbort.abort();
     }
 
     _hexToRGBA(hex) {
@@ -688,10 +782,6 @@ class Game {
 
     // ===== PLANET INITIALIZATION =====
     initializePlanets() {
-        const sizes = { small: 20, medium: 30, large: 40, huge: 50 };
-        const mults = { small: 1.0, medium: 1.5, large: 2.0, huge: 2.5 };
-        const zooms = { small: 1.0, medium: 0.7, large: 0.5, huge: 0.4 };
-
         const planetCounts = { small: 20, medium: 30, large: 40, huge: 50 };
         const total = planetCounts[this.settings.galaxySize] || 30;
 
@@ -699,7 +789,6 @@ class Game {
         const worldRadius = worldRadii[this.settings.galaxySize] || 900;
         const w = worldRadius * 2 + 300; // bounding square for camera
         const h = worldRadius * 2 + 300;
-        const margin = 150;
         const minDist = 120;
 
         const positions = [];
@@ -721,11 +810,10 @@ class Game {
         };
 
         const pos0 = { x: w / 2 + Math.cos(Math.PI) * (worldRadius * 0.8), y: h / 2 };
-      const pos1 = { x: w / 2 + Math.cos(0) * (worldRadius * 0.8), y: h / 2 };
+        const pos1 = { x: w / 2 + Math.cos(0) * (worldRadius * 0.8), y: h / 2 };
         positions.push(pos0, pos1);
 
         const numTeams = Math.min(this.settings.playerCount, 5);
-        const zoom = zooms[this.settings.galaxySize] || 0.7;
         const fitZoomX = canvas.width / w;
         const fitZoomY = canvas.height / h;
         this.camera.zoom = Math.min(fitZoomX, fitZoomY);
@@ -749,6 +837,9 @@ class Game {
 
         this.generateConnections();
 
+        // Planets are static, so this grid is built once and queried by ship collision
+        for (const p of this.planets) this.planetGrid.insert(p.id, p.x, p.y);
+
         // Spawn starting ships
         for (let i = 0; i < numTeams; i++) {
             for (let j = 0; j < STARTING_SHIPS; j++) this.spawnShipAtPlanet(this.planets[i]);
@@ -768,7 +859,7 @@ class Game {
 
     // ===== CONNECTION GENERATION =====
     generateConnections() {
-        const maxAttempts = 10;
+        const maxAttempts = 30;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             for (const p of this.planets) p.connections = [];
 
@@ -796,6 +887,7 @@ class Game {
 
             if (this._validateBiReachability() && this._validateConns()) return;
         }
+        console.warn(`Connection generation gave up after ${maxAttempts} attempts; the galaxy graph may be irregular.`);
     }
 
     _getAvailableConns(pid, maxDist) {
@@ -999,25 +1091,31 @@ class Game {
                 this._reachableCache[p.team].push(this.planets[c.targetId]);
             }
         }
-        // Dedupe by id
+        // Dedupe by id, using a monotonic stamp per team instead of a fresh Set
+        let seen = this._reachableSeen;
+        if (!seen || seen.length < this.planets.length) {
+            seen = this._reachableSeen = new Uint32Array(this.planets.length);
+            this._reachableStamp = 0;
+        }
         for (let t = 1; t <= 5; t++) {
-            const seen = new Set();
+            const stamp = ++this._reachableStamp;
             const arr = this._reachableCache[t];
             let write = 0;
             for (let i = 0; i < arr.length; i++) {
-                if (!seen.has(arr[i].id)) { seen.add(arr[i].id); arr[write++] = arr[i]; }
+                const id = arr[i].id;
+                if (seen[id] !== stamp) { seen[id] = stamp; arr[write++] = arr[i]; }
             }
             arr.length = write;
         }
     }
 
     getPlayerReachablePlanetIds() {
+        const s = this._playerReachableIds;
+        s.clear();
         if (this.settings.aiOnlyMode || teamPlanetCount[1] === 0) {
-            const s = new Set();
             for (const p of this.planets) s.add(p.id);
             return s;
         }
-        const s = new Set();
         for (const p of this.planets) {
             if (p.team === 1) {
                 s.add(p.id);
@@ -1029,6 +1127,9 @@ class Game {
 
     // ===== INPUT =====
     setupEventListeners() {
+        this._listenerAbort = new AbortController();
+        const opts = { signal: this._listenerAbort.signal };
+
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             const rect = canvas.getBoundingClientRect();
@@ -1036,10 +1137,10 @@ class Game {
             const my = e.clientY - rect.top;
             const wx = (mx - this.camera.x) / this.camera.zoom;
             const wy = (my - this.camera.y) / this.camera.zoom;
-            this.camera.zoom = Math.max(0.1, this.camera.zoom * (e.deltaY > 0 ? 0.9 : 1.1));
+            this.camera.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.camera.zoom * (e.deltaY > 0 ? 0.9 : 1.1)));
             this.camera.x = mx - wx * this.camera.zoom;
             this.camera.y = my - wy * this.camera.zoom;
-        });
+        }, { ...opts, passive: false });
 
         canvas.addEventListener('mousedown', (e) => {
             if (e.button === 0) {
@@ -1048,7 +1149,7 @@ class Game {
                 this.camera.lastMouseY = e.clientY;
                 this.camera.hasDragged = false;
             }
-        });
+        }, opts);
 
         canvas.addEventListener('mousemove', (e) => {
             if (this.camera.isDragging) {
@@ -1060,7 +1161,7 @@ class Game {
                 this.camera.lastMouseY = e.clientY;
                 if (Math.abs(dx) + Math.abs(dy) > 3) this.camera.hasDragged = true;
             }
-        });
+        }, opts);
 
         canvas.addEventListener('mouseup', (e) => {
             if (e.button === 0) {
@@ -1068,21 +1169,24 @@ class Game {
                 this.camera.isDragging = false;
                 this.camera.hasDragged = false;
             }
-        });
+        }, opts);
 
-        canvas.addEventListener('mouseleave', () => { this.camera.isDragging = false; });
+        canvas.addEventListener('mouseleave', () => { this.camera.isDragging = false; }, opts);
 
-        document.getElementById('restartButton').addEventListener('click', () => location.reload());
+        document.getElementById('restartButton').addEventListener('click', () => location.reload(), opts);
 
-        document.getElementById('upgradeAttack').addEventListener('click', () => {
-            if (this._spend(1, 'attack', 1)) { recomputeTeamStats(); this.updateUpgradeUI(); }
-        });
-        document.getElementById('upgradeDefense').addEventListener('click', () => {
-            if (this._spend(1, 'defense', 1)) { recomputeTeamStats(); this.updateUpgradeUI(); }
-        });
-        document.getElementById('upgradeSpeed').addEventListener('click', () => {
-            if (this._spend(1, 'speed', 1)) { recomputeTeamStats(); this.updateUpgradeUI(); }
-        });
+        const upgrade = (id, stat) => {
+            document.getElementById(id).addEventListener('click', () => {
+                if (this._spend(1, stat, 1)) {
+                    recomputeTeamStats();
+                    this.updateUpgradeUI();
+                    audio.playUpgrade();
+                }
+            }, opts);
+        };
+        upgrade('upgradeAttack', 'attack');
+        upgrade('upgradeDefense', 'defense');
+        upgrade('upgradeSpeed', 'speed');
     }
 
     handleClick(e) {
@@ -1192,43 +1296,39 @@ class Game {
         this._checkWinConditions();
     }
 
+    // Pairs each ship with its nearest enemy in range, closest pairs winning the
+    // limited attacker slots on each target. Uses preallocated scratch arrays.
     _calculateCombat() {
         shipCombatTarget.fill(-1);
+        this._attackerCount.fill(0, 0, shipCount);
 
-        // For each ship, find nearest enemy within ATTACK_RANGE using spatial grid
-        // Cap at 3 attackers per target
-        const assignmentsPerTarget = new Map();
-
-        // Collect pairs (sorted by distance later)
-        const pairs = [];
+        const pairShip = this._pairShip, pairEnemy = this._pairEnemy;
+        const pairDist = this._pairDist, order = this._pairOrder;
+        let n = 0;
 
         for (let i = 0; i < shipCount; i++) {
             if (shipHealth[i] <= 0) continue;
-            const myTeam = shipTeam[i];
-            const sx = shipX[i], sy = shipY[i];
-            let bestDist = ATTACK_RANGE_SQ;
-            let bestEnemy = -1;
-
-            this.grid.query(sx, sy, ATTACK_RANGE, (j) => {
-                if (j === i || shipTeam[j] === myTeam || shipHealth[j] <= 0) return;
-                const dx = shipX[j] - sx, dy = shipY[j] - sy;
-                const dSq = dx * dx + dy * dy;
-                if (dSq < bestDist) { bestDist = dSq; bestEnemy = j; }
-            });
-
-            if (bestEnemy >= 0) {
-                pairs.push({ ship: i, enemy: bestEnemy, dist: bestDist });
+            this._qShip = i;
+            this._qBestEnemy = -1;
+            this._qBestDist = ATTACK_RANGE_SQ;
+            this.grid.query(shipX[i], shipY[i], ATTACK_RANGE, this._findEnemyCb);
+            if (this._qBestEnemy >= 0) {
+                pairShip[n] = i;
+                pairEnemy[n] = this._qBestEnemy;
+                pairDist[n] = this._qBestDist;
+                order[n] = n;
+                n++;
             }
         }
 
-        // Sort closest first, assign max 3 per enemy
-        pairs.sort((a, b) => a.dist - b.dist);
-        for (let p = 0; p < pairs.length; p++) {
-            const enemy = pairs[p].enemy;
-            const count = assignmentsPerTarget.get(enemy) || 0;
-            if (count < 3) {
-                shipCombatTarget[pairs[p].ship] = enemy;
-                assignmentsPerTarget.set(enemy, count + 1);
+        const sorted = order.subarray(0, n).sort(this._pairSortCmp);
+        const counts = this._attackerCount;
+        for (let k = 0; k < n; k++) {
+            const p = sorted[k];
+            const enemy = pairEnemy[p];
+            if (counts[enemy] < MAX_ATTACKERS_PER_TARGET) {
+                shipCombatTarget[pairShip[p]] = enemy;
+                counts[enemy]++;
             }
         }
     }
@@ -1312,38 +1412,22 @@ class Game {
                 shipVX[i] = 0;
                 shipVY[i] = 0;
             }
+        } else {
+            // No target: hold position instead of coasting on the last heading forever
+            shipVX[i] = 0;
+            shipVY[i] = 0;
         }
 
         shipX[i] += shipVX[i] * dt;
         shipY[i] += shipVY[i] * dt;
 
-        // Planet collision
-        for (let pi = 0; pi < this.planets.length; pi++) {
-            const p = this.planets[pi];
-            const dx = shipX[i] - p.x, dy = shipY[i] - p.y;
-            const distSq = dx * dx + dy * dy;
-            const minD = p.size + PLANET_CLEARANCE;
-            if (distSq < minD * minD && distSq > 0.01) {
-                const dist = Math.sqrt(distSq);
-                const inv = minD / dist;
-                shipX[i] = p.x + dx * inv;
-                shipY[i] = p.y + dy * inv;
-            }
-        }
+        this._qShip = i;
+
+        // Planet collision (nearby planets only)
+        this.planetGrid.query(shipX[i], shipY[i], MAX_PLANET_RADIUS + PLANET_CLEARANCE, this._planetCollideCb);
 
         // Ship-ship collision (spatial grid, only nearby)
-        this.grid.query(shipX[i], shipY[i], SHIP_SPACING, (j) => {
-            if (j === i || shipHealth[j] <= 0) return;
-            const dx = shipX[j] - shipX[i], dy = shipY[j] - shipY[i];
-            const dSq = dx * dx + dy * dy;
-            if (dSq < SHIP_SPACING_SQ && dSq > 0.01) {
-                const dist = Math.sqrt(dSq);
-                const overlap = SHIP_SPACING - dist;
-                const inv = 1 / dist;
-                shipX[i] -= dx * inv * (overlap * 0.5);
-                shipY[i] -= dy * inv * (overlap * 0.5);
-            }
-        });
+        this.grid.query(shipX[i], shipY[i], SHIP_SPACING, this._shipCollideCb);
 
         // Planet attack (drive-by + targeted)
         if (!inCombat) {
@@ -1375,29 +1459,27 @@ class Game {
         }
     }
 
+    // One-directional: the defender retaliates on its own attack cooldown, so
+    // damaging both ships here would double every exchange.
     _engageCombat(a, b) {
         shipAtkAnimTime[a] = 0.2;
         shipAtkTargetX[a] = shipX[b];
         shipAtkTargetY[a] = shipY[b];
-        shipAtkAnimTime[b] = 0.2;
-        shipAtkTargetX[b] = shipX[a];
-        shipAtkTargetY[b] = shipY[a];
-
-        // A attacks B
+        if (shipTeam[a] === 1 || shipTeam[b] === 1) audio.playShipAttack();
         this._dealDamage(a, b);
-        if (shipHealth[b] > 0) this._dealDamage(b, a);
     }
 
     _dealDamage(attacker, target) {
+        if (shipHealth[target] <= 0) return;
         const atk = teamAttack[shipTeam[attacker]];
         const def = teamDefense[shipTeam[target]];
         const base = atk * 0.5;
         const reduction = def / (def + 50);
         const dmg = base * (1 - reduction * 0.5);
         shipHealth[target] -= dmg;
-        if (shipHealth[target] <= 0) {
+        if (shipHealth[target] <= 0 && killShip(target)) {
             this.awardPoints(shipTeam[attacker], this.POINTS_PER_SHIP);
-            killShip(target);
+            audio.playShipDestroyed();
         }
     }
 
@@ -1421,20 +1503,32 @@ class Game {
             planet.team = attackerTeam;
             planet.health = planet.getMaxHealth(teamDefenseTokens[attackerTeam]) * 0.75;
             planet.productionTimer = 0;
-            if (oldTeam !== attackerTeam) this.awardPoints(attackerTeam, this.POINTS_PER_PLANET);
+            if (oldTeam !== attackerTeam) {
+                this.awardPoints(attackerTeam, this.POINTS_PER_PLANET);
+                audio.playPlanetCaptured(attackerTeam, oldTeam);
+            }
         }
     }
 
     _updateProduction(dt) {
+        // One pass over the pool instead of one pass per neutral planet
+        let neutralCounts = this._neutralShipsPerPlanet;
+        if (!neutralCounts || neutralCounts.length < this.planets.length) {
+            neutralCounts = this._neutralShipsPerPlanet = new Uint16Array(this.planets.length);
+        }
+        neutralCounts.fill(0);
+        for (let i = 0; i < shipCount; i++) {
+            if (shipHealth[i] > 0 && shipTeam[i] === 0) {
+                const home = shipHomePlanet[i];
+                if (home >= 0 && home < neutralCounts.length) neutralCounts[home]++;
+            }
+        }
+
         for (let pi = 0; pi < this.planets.length; pi++) {
             const p = this.planets[pi];
             if (p.team === 0) {
                 // Neutral: cap per planet
-                let count = 0;
-                for (let i = 0; i < shipCount; i++) {
-                    if (shipHealth[i] > 0 && shipTeam[i] === 0 && shipHomePlanet[i] === p.id) count++;
-                }
-                if (count < STARTING_SHIPS && p.productionTimer >= PRODUCTION_INTERVAL) {
+                if (neutralCounts[p.id] < STARTING_SHIPS && p.productionTimer >= PRODUCTION_INTERVAL) {
                     this.spawnShipAtPlanet(p);
                     p.productionTimer = 0;
                 }
@@ -1491,7 +1585,7 @@ class Game {
             if (this.settings.aiOnlyMode && this.settings.batchTestMode) {
                 this._handleBatchCompletion();
             } else if (this.settings.aiOnlyMode && this.settings.idleMode) {
-                setTimeout(() => { this.stopped = true; startGame(); }, 100);
+                setTimeout(() => { this.stop(); startGame(); }, 100);
             } else if (!this.settings.aiOnlyMode) {
                 this._showGameOver();
             }
@@ -1512,6 +1606,7 @@ class Game {
             message.textContent = `${TEAM_NAMES[this.winner]} has conquered the galaxy.`;
         }
         screen.classList.remove('hidden');
+        audio.playGameOver(this.winner === 1);
     }
 
     _handleBatchCompletion() {
@@ -1527,7 +1622,7 @@ class Game {
         console.log(`[BATCH ${window.currentTestGame}/${window.totalTestGames}] Winner: ${TEAM_NAMES[this.winner]}, Duration: ${dur.toFixed(1)}s`);
         if (window.currentTestGame < window.totalTestGames) {
             window.currentTestGame++;
-            setTimeout(() => { this.stopped = true; startGame(); }, 100);
+            setTimeout(() => { this.stop(); startGame(); }, 100);
         } else {
             this._showBatchResults();
         }
@@ -1597,7 +1692,8 @@ class Game {
         ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
         // --- Connection lines ---
-        const drawnPairs = new Set();
+        const drawnPairs = this._drawnPairs;
+        drawnPairs.clear();
         let lineCount = 0;
         const lp = r._linePositions;
         const lc = r._lineColors;
@@ -1925,13 +2021,19 @@ function initializeStartMenu() {
     const controlsModal = document.getElementById('controlsModal');
     const closeControlsButton = document.getElementById('closeControlsButton');
 
+    audio.playMusic('musicMenu');
+
     if (!DEBUG) {
         const tsc = document.getElementById('teamStatsContainer');
         if (tsc) tsc.style.display = 'none';
     }
 
-    controlsButton.addEventListener('click', () => controlsModal.classList.remove('hidden'));
+    controlsButton.addEventListener('click', () => {
+        audio.playUiClick();
+        controlsModal.classList.remove('hidden');
+    });
     closeControlsButton.addEventListener('click', () => {
+        audio.playUiClick();
         controlsModal.classList.add('hidden');
         if (game && game.paused) document.getElementById('pauseMenu').classList.remove('hidden');
         else if (game) document.getElementById('ui').classList.remove('hidden');
@@ -2006,6 +2108,8 @@ function initializeStartMenu() {
         document.getElementById('startMenu').classList.add('hidden');
         document.getElementById('ui').classList.remove('hidden');
         if (settings.aiOnlyMode) document.getElementById('upgradePanel').classList.add('hidden');
+        audio.playUiClick();
+        audio.playMusic('musicBattle');
         game = new Game(settings);
     });
 
@@ -2035,6 +2139,7 @@ function initializeStartMenu() {
 }
 
 function startGame() {
+    if (game) game.stop();
     const settings = {
         galaxySize: document.getElementById('galaxySize').value,
         playerCount: parseInt(document.getElementById('playerCount').value),
@@ -2048,6 +2153,13 @@ function startGame() {
 }
 
 function setupPauseMenu() {
+    const soundToggle = document.getElementById('soundToggle');
+    const musicToggle = document.getElementById('musicToggle');
+    soundToggle.checked = audio.soundEnabled;
+    musicToggle.checked = audio.musicEnabled;
+    soundToggle.addEventListener('change', () => audio.setSoundEnabled(soundToggle.checked));
+    musicToggle.addEventListener('change', () => audio.setMusicEnabled(musicToggle.checked));
+
     const pauseButton = document.getElementById('pauseButton');
     const pauseMenu = document.getElementById('pauseMenu');
     const resumeButton = document.getElementById('resumeButton');
@@ -2056,9 +2168,11 @@ function setupPauseMenu() {
     const controlsModal = document.getElementById('controlsModal');
 
     pauseButton.addEventListener('click', () => {
+        audio.playUiClick();
         if (game) { game.paused = true; pauseMenu.classList.remove('hidden'); document.getElementById('ui').classList.add('hidden'); }
     });
     resumeButton.addEventListener('click', () => {
+        audio.playUiClick();
         if (game) { game.paused = false; pauseMenu.classList.add('hidden'); document.getElementById('ui').classList.remove('hidden'); }
     });
     pauseExitButton.addEventListener('click', () => {
@@ -2067,6 +2181,7 @@ function setupPauseMenu() {
         window.location.href = url.toString();
     });
     pauseControlsButton.addEventListener('click', () => {
+        audio.playUiClick();
         pauseMenu.classList.add('hidden');
         controlsModal.classList.remove('hidden');
     });

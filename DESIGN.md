@@ -1,8 +1,10 @@
-# 📄 Galaxy Wars (Web Rebuild) — Technical Specification
+# 📄 Stellar Conquest — Technical Specification
 
 ## Overview
 
-This document defines the full mechanics and architecture for a web-based recreation of *Galaxy Wars*, based on reverse-engineered gameplay behavior.
+This document describes the mechanics and architecture of Stellar Conquest, a web-based
+recreation of *Galaxy Wars* based on reverse-engineered gameplay behaviour. It reflects
+what `web/js/game.js` actually implements; update it alongside the code.
 
 The game is a **real-time, continuous-space RTS** where players control fleets of ships to capture planets and eliminate opponents.
 
@@ -60,10 +62,15 @@ interface Planet {
 
 ```ts
 if (planet.health <= 0) {
+  // Only reachable planets can be captured: the attacking team must own a planet
+  // with a connection to this one (teams with no planets left ignore this rule).
   planet.team = attacker.team;
-  planet.health = planet.maxHealth * 0.25;
+  planet.health = planet.maxHealth * 0.75;
 }
 ```
+
+Planets are linked by generated connections; a team may only attack and capture planets
+adjacent to one it owns. Unreachable planets are dimmed in the UI.
 
 ---
 
@@ -130,8 +137,11 @@ position += velocity * dt;
 ## Global Capacity
 
 ```ts
-MAX_FLEET = BASE_CAP + (PLANETS_OWNED * CAP_AMNT);
+MAX_FLEET = BASE_CAP + (PLANETS_OWNED * CAP_AMNT)
+                     + (defenseTokens * SHIP_CAP_PER_DEFENSE_TOKEN);
 ```
+
+Capacity is tracked per team (not globally); neutral planets keep a small fixed garrison.
 
 ## Behavior
 
@@ -196,46 +206,29 @@ Ships can move anywhere but only attack:
 
 ## Combat Model
 
-* Combat is **tick-based**
-* Each tick resolves a **probabilistic duel**
-* Winner deals **damage (not instant kill)**
-
----
-
-## Probability Calculation
-
-```ts
-const powerA = A.attack / B.defense;
-const powerB = B.attack / A.defense;
-
-const pA = powerA / (powerA + powerB);
-```
-
----
-
-## Combat Resolution
-
-```ts
-if (Math.random() < pA) {
-    dealDamage(B, A);
-} else {
-    dealDamage(A, B);
-}
-```
+* Combat is **tick-based** and **deterministic** (no per-duel dice roll)
+* Each tick every ship is paired with its nearest enemy inside `ATTACK_RANGE`
+* Closest pairs win the limited slots: at most `MAX_ATTACKERS_PER_TARGET` ships may
+  focus the same target in a tick
+* Each ship damages its own target on its own cooldown, so an even fight naturally
+  becomes a mutual exchange
 
 ---
 
 ## Damage Calculation
 
 ```ts
-function dealDamage(target, attacker) {
-    const raw = attacker.attack;
+function dealDamage(attacker, target) {
+    const base = teamAttack[attacker.team] * 0.5;
+    const def = teamDefense[target.team];
+    const reduction = def / (def + 50);
 
-    const mitigated = raw * (attacker.attack / (attacker.attack + target.defense));
-
-    target.health -= mitigated;
+    target.health -= base * (1 - reduction * 0.5);
 }
 ```
+
+A kill is idempotent: the first hit that drops a ship to zero recycles its pool slot and
+awards the points; later hits in the same tick are ignored.
 
 ---
 
@@ -245,8 +238,8 @@ Each ship has a cooldown:
 
 ```ts
 if (time >= nextAttackTime) {
-    resolveCombat();
-    nextAttackTime = time + attackCooldown;
+    engageCombat(ship, ship.combatTarget);
+    nextAttackTime = time + ATTACK_COOLDOWN;
 }
 ```
 
@@ -377,19 +370,25 @@ ATTACK_RANGE
 
 # 🧱 Architecture Notes (Web)
 
-## Recommended Stack
+## Stack
 
-* Rendering: Canvas or WebGL
-* Library: PixiJS (recommended)
+* Rendering: **WebGL2** with instanced draws, plus a Canvas2D overlay for text/rings
+* No framework, no build step (Tailwind is precompiled into `web/css/tailwind.css`)
+* Canvas2D fallback when WebGL2 is unavailable
 
 ---
 
 ## Performance Considerations
 
-* Use spatial partitioning (quadtree) for:
+* Ship data lives in **struct-of-arrays** typed arrays with a free-list slot pool
+* Spatial partitioning uses a **spatial hash grid** (rebuilt each tick for ships, built
+  once for planets) for:
 
-  * Ship proximity checks
-  * Combat detection
+  * Ship proximity and collision checks
+  * Combat target selection
+  * AI threat detection
+* Hot loops reuse preallocated scratch buffers and hoisted callbacks instead of
+  allocating per tick
 
 ---
 
@@ -397,13 +396,13 @@ ATTACK_RANGE
 
 This game is:
 
-> A continuous-space RTS driven by probabilistic combat and regeneration
+> A continuous-space RTS driven by attrition combat and regeneration
 
 Core gameplay emerges from:
 
 * Movement timing
 * Fleet distribution
-* Combat randomness
+* Focus fire (attacker limits per target)
 * Recovery through regen
 
 ---
