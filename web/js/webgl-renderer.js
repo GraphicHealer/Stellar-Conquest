@@ -403,5 +403,12 @@ class WebGLRenderer {
         gl.deleteProgram(this.shipProg);
         gl.deleteProgram(this.circleProg);
         gl.deleteProgram(this.lineProg);
+        for (const buf of [this.shipTriBuf, this.shipInstBuf, this.circleGeomBuf,
+            this.circleInstBuf, this.linePosBuf, this.lineColBuf]) {
+            gl.deleteBuffer(buf);
+        }
+        for (const vao of [this.shipVAO, this.circleVAO, this.lineVAO]) {
+            gl.deleteVertexArray(vao);
+        }
     }
 }
