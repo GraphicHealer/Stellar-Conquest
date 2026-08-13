@@ -7,7 +7,7 @@ const AUDIO_BASE_PATH = 'audio/';
 
 // name -> { file, volume, poolSize, minInterval (seconds), loop }
 const AUDIO_CLIPS = {
-    musicMenu: { file: 'music_menu.mp3', volume: 0.4, loop: true },
+    musicMenu: { file: 'music_menu.mp3', volume: 0.4, loop: false },
     musicBattle: { file: 'music_battle.mp3', volume: 0.35, loop: true },
     uiClick: { file: 'ui_click.mp3', volume: 0.5, poolSize: 2, minInterval: 0.05 },
     shipAttack: { file: 'ship_attack.mp3', volume: 0.25, poolSize: 6, minInterval: 0.08 },
